@@ -1,0 +1,30 @@
+{
+  "name": "distributed-rate-limiter",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@grpc/grpc-js": "^1.14.3",
+    "@grpc/proto-loader": "^0.8.0",
+    "@types/node": "^25.0.9",
+    "@types/pg": "^8.16.0",
+    "@types/uuid": "^10.0.0",
+    "dotenv": "^17.2.3",
+    "google-protobuf": "^4.0.1",
+    "pg": "^8.17.1",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.9.3",
+    "uuid": "^13.0.0"
+  },
+  "devDependencies": {
+    "grpc-tools": "^1.13.1",
+    "ts-proto": "^2.11.0"
+  }
+}

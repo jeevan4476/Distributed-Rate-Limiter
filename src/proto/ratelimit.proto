@@ -1,0 +1,54 @@
+syntax = "proto3";
+
+package ratelimit.v1;
+
+import "google/protobuf/duration.proto";
+
+service RateLimiter {
+  // Acquire attempts to consume `cost` tokens from the bucket `key`.
+  //
+  // Consistency:
+  // - Returns only after the transaction is COMMITTED to the DB.
+  // - If the deadline expires, the client MUST assume the result is UNKNOWN (but treated as Denied).
+  rpc Acquire(AcquireRequest) returns (AcquireResponse) {}
+}
+
+message AcquireRequest {
+  // logical_key identifies the resource (e.g., "user:123").
+  // Max length: 256 bytes.
+  string logical_key = 1;
+
+  // cost is the number of tokens to consume.
+  // Must be > 0.
+  uint32 cost = 2;
+
+  // request_id is a UUIDv4 client-generated token for idempotency.
+  // REQUIRED. Requests without this will be rejected.
+  string request_id = 3;
+}
+
+message AcquireResponse {
+  enum Verdict {
+    VERDICT_UNSPECIFIED = 0;
+    
+    // ALLOWED: Tokens were successfully consumed. 
+    // State is durable.
+    ALLOWED = 1;
+    
+    // DENIED: Insufficient tokens. 
+    // State (refill) was committed, but consumption failed.
+    DENIED = 2;
+  }
+
+  Verdict verdict = 1;
+
+  // remaining represents the accurate token balance at the time of commit.
+  double remaining = 2;
+
+  // retry_after indicates when the client should retry if DENIED.
+  // 0 if ALLOWED.
+  google.protobuf.Duration retry_after = 3;
+
+  // metadata for debugging (optional)
+  map<string, string> metadata = 4;
+}
