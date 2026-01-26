@@ -4,7 +4,7 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "bun test"
   },
   "keywords": [],
   "author": "",
@@ -19,11 +19,11 @@
     "dotenv": "^17.2.3",
     "google-protobuf": "^4.0.1",
     "pg": "^8.17.1",
-    "ts-node": "^10.9.2",
     "typescript": "^5.9.3",
     "uuid": "^13.0.0"
   },
   "devDependencies": {
+    "bun-types": "latest",
     "grpc-tools": "^1.13.1",
     "ts-proto": "^2.11.0"
   }

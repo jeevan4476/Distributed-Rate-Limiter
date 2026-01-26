@@ -1,4 +1,15 @@
 services:
+  app:
+    build: .
+    container_name: distributed-rate-limiter-app
+    ports:
+      - "50051:50051"
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@postgres:5432/ratelimiter
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   postgres:
     image: postgres:15-alpine
     container_name: distributed-rate-limiter-postgres
