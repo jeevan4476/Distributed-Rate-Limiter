@@ -1,0 +1,16 @@
+Starting Benchmark...
+Warming up...
+
+--- Scenario 1: Low Contention (1000 reqs, 20 concurrency) ---
+Total Time: 994.77ms
+Throughput: 1005.25 RPS
+Latency P50: 9.35ms
+Latency P95: 77.55ms
+Latency P99: 91.44ms
+
+--- Scenario 2: High Contention (200 reqs, 10 concurrency) ---
+Total Time: 738.58ms
+Throughput: 270.79 RPS
+Latency P50: 33.84ms
+Latency P95: 68.22ms
+Latency P99: 71.21ms
