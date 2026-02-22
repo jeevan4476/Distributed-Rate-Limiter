@@ -14,8 +14,6 @@ const logger: Logger = {
 const CONNECTION_STRING = process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/ratelimiter';
 
 async function runBenchmark() {
-    console.log('Starting Benchmark...');
-
     const pool = new Pool({ connectionString: CONNECTION_STRING, max: 20 });
     const repo = new PostgresRateLimitRepository(CONNECTION_STRING);
     const service = new AcquireService(repo, logger, {
@@ -26,17 +24,14 @@ async function runBenchmark() {
         defaultRefillRate: 100
     });
 
-    // Warmup
-    console.log('Warming up...');
+
     for (let i = 0; i < 100; i++) {
         await service.acquire({ requestId: uuidv4() }, `warmup:${i}`, 1);
     }
-
-    // Scenario 1: Low Contention (Random Keys)
     const SCENARIO_1_N = 1000;
     const SCENARIO_1_CONCURRENCY = 20;
 
-    console.log(`\n--- Scenario 1: Low Contention (${SCENARIO_1_N} reqs, ${SCENARIO_1_CONCURRENCY} concurrency) ---`);
+    console.log(`\nScenario 1: Low Contention (${SCENARIO_1_N} reqs, ${SCENARIO_1_CONCURRENCY} concurrency)`);
     const latencies1: number[] = [];
     const start1 = performance.now();
 
@@ -49,7 +44,7 @@ async function runBenchmark() {
     const SCENARIO_2_N = 200; // Smaller N because retries slow it down
     const SCENARIO_2_CONCURRENCY = 10;
 
-    console.log(`\n--- Scenario 2: High Contention (${SCENARIO_2_N} reqs, ${SCENARIO_2_CONCURRENCY} concurrency) ---`);
+    console.log(`\nScenario 2: High Contention (${SCENARIO_2_N} reqs, ${SCENARIO_2_CONCURRENCY} concurrency)`);
     const latencies2: number[] = [];
     const start2 = performance.now();
 

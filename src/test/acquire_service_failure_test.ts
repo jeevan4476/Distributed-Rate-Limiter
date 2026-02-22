@@ -4,8 +4,6 @@ import { SqlRateLimitRepository } from '../persistence/pg_repository';
 import { Logger, AcquireResult, AcquireResultStatus, FatalError } from '../domain/types';
 import { PoolClient } from 'pg';
 
-// --- Mocks ---
-
 class MockLogger implements Logger {
     info(msg: string, meta?: any) { console.log(`[INFO] ${msg}`, meta); }
     error(msg: string, meta?: any) { console.error(`[ERROR] ${msg}`, meta); }
@@ -85,8 +83,6 @@ class MockRepository implements SqlRateLimitRepository {
     }
 }
 
-// --- Tests ---
-
 async function runTests() {
     const logger = new MockLogger();
     const config: RateLimitConfig = {
@@ -121,7 +117,6 @@ async function runTests() {
         } catch (e) {
             console.error('FAIL: Should have succeeded after retry', e);
         }
-        console.log('---');
     }
 
     // 2. Deadlock Retry Test
@@ -146,7 +141,6 @@ async function runTests() {
         } catch (e) {
             console.error('FAIL: Should have succeeded after retry', e);
         }
-        console.log('---');
     }
 
     // 3. Timeout Fail-closed Test
@@ -170,7 +164,6 @@ async function runTests() {
                 console.error('FAIL: Threw unexpected error', e);
             }
         }
-        console.log('---');
     }
 
     // 4. Idempotent Replay Test (Recovery)
@@ -194,14 +187,6 @@ async function runTests() {
         } else {
             console.error('FAIL: Did not return cached result', result);
         }
-
-        // Verify tokens were NOT consumed again (mock implementation created fresh bucket if not found, but logic should follow idempotency path first)
-        // With mock repo specific implementation, createBucket is called only if getBucketForUpdate fails or returns null.
-        // But acquire flow checks idempotency FIRST.
-        // So createBucket/getBucket should NOT be called if logic is correct.
-        // However, checking side effects on Mock is harder unless we spy. 
-        // We relied on the returned result matching the store.
-        console.log('---');
     }
 }
 
