@@ -12,6 +12,7 @@ end
 
 -- loading buket 
 local raw = redis.call("HGETALL",bucketKey)
+local tokens, lastRefill
 
 if #raw ==0 then
     tokens = capacity
@@ -26,10 +27,9 @@ else
 end
 
 --refill tokens 
-local delta = math.max(0,now-lastRefill)
-local refill = (delta/1000) * refillRate
-tokens = math.min(capacity,tokens + refill)
-lastRefill = now
+local delta = math.max(0, now - lastRefill)
+local refill = (delta / 1000) * refillRate
+tokens = math.min(capacity, tokens + refill)
 
 local status 
 local waitTime = 0
