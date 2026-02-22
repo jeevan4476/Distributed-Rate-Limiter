@@ -11,17 +11,18 @@ if redis.call("EXISTS", idKey) == 1 then
 end
 
 -- loading buket 
-local bucket = redis.call("HGETALL",bucketKey)
+local raw = redis.call("HGETALL",bucketKey)
 
-local tokens
-local lastRefill
-
-if next(bucket) == nil then 
+if #raw ==0 then
     tokens = capacity
-    lastRefill = now
-else 
-    tokens = tonumber(redis.call("HGET",bucketKey,"tokens"))
-    lastRefill = tonumber(redis.call("HGET",bucketKey,"last_refill_at"))
+    lastRefill =now
+else
+    local data = {}
+    for i = 1, #raw , 2 do
+        data[raw[i]] = raw[i+1]
+    end
+    tokens = tonumber(data["tokens"])
+    lastRefill = tonumber(data["last_refill_at"])
 end
 
 --refill tokens 
@@ -36,9 +37,9 @@ local waitTime = 0
 -- try to acqurie
 if tokens >= requested then 
     tokens = tokens - requested
-    status = "GRANTED"
+    status = "ALLOWED"
 else 
-    status = "REJECTED"
+    status = "DENIED"
     waitTime = math.ceil(((requested - tokens) / refillRate) * 1000)
 end
 
