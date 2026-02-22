@@ -6,6 +6,7 @@ import { PostgresRateLimitRepository } from '../persistence/pg_repository';
 import { RateLimitDomainService } from '../domain/service';
 import { RateLimitGrpcHandler } from '../transport/grpc_handler';
 import { Logger } from '../domain/types';
+import { AcquireService } from '../service/acquire_service';
 
 dotenv.config();
 
@@ -47,7 +48,7 @@ async function main() {
 
     // Wiring
     const repo = new PostgresRateLimitRepository(dbUrl);
-    const service = new RateLimitDomainService(repo, consoleLogger, config);
+    const service = new AcquireService(repo, consoleLogger, config);
     const handler = new RateLimitGrpcHandler(service);
 
     const server = new grpc.Server();
@@ -65,7 +66,6 @@ async function main() {
             return;
         }
         console.log(`Server listening on ${bindAddr}`);
-        server.start();
     });
 
     // Graceful Shutdown
