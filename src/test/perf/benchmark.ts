@@ -4,6 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { AcquireService } from '../../service/acquire_service';
 import { PostgresRateLimitRepository } from '../../persistence/pg_repository';
 import { Logger } from '../../domain/types';
+import { RedisRateLimitRepository } from '../../persistence/redis_reporistory';
 
 const logger: Logger = {
     info: () => { }, // Silence info for perf
@@ -11,19 +12,26 @@ const logger: Logger = {
     warn: () => { },
 };
 
+const BACKEND = process.env.BACKEND || 'postgres';
 const CONNECTION_STRING = process.env.DATABASE_URL || 'postgresql://postgres:postgres@localhost:5432/ratelimiter';
+const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
 
 async function runBenchmark() {
-    const pool = new Pool({ connectionString: CONNECTION_STRING, max: 20 });
-    const repo = new PostgresRateLimitRepository(CONNECTION_STRING);
-    const service = new AcquireService(repo, logger, {
+    let repo: PostgresRateLimitRepository | RedisRateLimitRepository;
+    let pool : Pool | null = null;
+    if(BACKEND == 'redis'){
+        repo = new RedisRateLimitRepository(REDIS_URL);
+    }else{
+        pool = new Pool({connectionString: CONNECTION_STRING,max: 20});
+        repo = new PostgresRateLimitRepository(CONNECTION_STRING);
+    }
+    const service = new AcquireService(repo as any , logger, {
         maxRetries: 3,
         baseBackoffMs: 5,
         maxBackoffMs: 50,
         defaultCapacity: 100,
         defaultRefillRate: 100
     });
-
 
     for (let i = 0; i < 100; i++) {
         await service.acquire({ requestId: uuidv4() }, `warmup:${i}`, 1);
@@ -54,7 +62,7 @@ async function runBenchmark() {
     printStats(latencies2, duration2, SCENARIO_2_N);
 
     await repo.close();
-    await pool.end();
+   if (pool) await pool.end();
 }
 
 async function runConcurrentRequests(
@@ -72,10 +80,7 @@ async function runConcurrentRequests(
             const t0 = performance.now();
             try {
                 await service.acquire({ requestId: uuidv4() }, keyGenerator(), 1);
-            } catch (e) {
-                // Ignore errors for throughput, but record latency? 
-                // Or maybe skip?
-            }
+            } catch (e) {}
             const t1 = performance.now();
             latencies.push(t1 - t0);
         }

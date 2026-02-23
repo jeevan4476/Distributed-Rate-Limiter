@@ -3,7 +3,8 @@ import {
     AcquireResult,
     AcquireResultStatus,
     FatalError,
-    Logger
+    Logger,
+    RateLimitRepository
 } from '../domain/types';
 import { SqlRateLimitRepository } from '../persistence/pg_repository';
 import { calculateTokenConsumption } from '../domain/token_bucket';
@@ -18,7 +19,7 @@ export interface RateLimitConfig {
 
 export class AcquireService {
     constructor(
-        private repo: SqlRateLimitRepository & { getPool(): any },
+        private repo: RateLimitRepository,
         private logger: Logger,
         private config: RateLimitConfig
     ) { }
@@ -33,83 +34,35 @@ export class AcquireService {
 
         while (true) {
             attempt++;
-            const client: PoolClient = await this.repo.getPool().connect();
-
             try {
-                // 1. Start Transaction
-                await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
-
-                // 2. Check Idempotency
-                const cachedRes = await this.repo.getIdempotencyKey(client, ctx.requestId);
-                if (cachedRes) {
-                    await client.query('COMMIT');
-                    this.logResult(ctx.requestId, logicalKey, cost, attempt, Date.now() - start, cachedRes, true);
-                    return cachedRes;
-                }
-
-                // 3. Get or Create Bucket
-                let bucket = await this.repo.getBucketForUpdate(client, logicalKey);
-                if (!bucket) {
-                    bucket = await this.repo.createBucket(client, logicalKey, {
-                        capacity: this.config.defaultCapacity,
-                        refillRate: this.config.defaultRefillRate,
-                        now: new Date()
-                    });
-                }
-
-                // 4. Pure Domain Logic
-                const nowMs = Date.now();
-                const result = calculateTokenConsumption(
-                    {
-                        tokens: bucket.tokens,
-                        lastRefillAt: bucket.lastRefillAt
-                    },
+                const result = await this.repo.acquire(
+                    ctx,
+                    logicalKey,
                     cost,
-                    nowMs,
-                    bucket.capacity,
-                    bucket.refillRate
-                );
+                    this.config.defaultCapacity,
+                    this.config.defaultRefillRate 
+                )
+               
+                this.logger.info('acquire_completed', {
+                    request_id: ctx.requestId,
+                    logical_key: logicalKey,
+                    verdict: result.status,
+                    cost,
+                    attempts: attempt,
+                    duration_ms: Date.now() - start,
+                    tokens_remaining: result.tokensRemaining,
+                    wait_time_ms: result.waitTimeMs
+                });
 
-                // 5. Update Bucket
-                await this.repo.updateBucketState(
-                    client,
-                    logicalKey,
-                    result.newTokens,
-                    new Date(result.newLastRefillAt)
-                );
-
-                // 6. Save Idempotency
-                const acquireResult: AcquireResult = {
-                    status: result.verdict,
-                    tokensRemaining: result.newTokens,
-                    waitTimeMs: result.waitTimeMs
-                };
-
-                await this.repo.saveIdempotencyKey(
-                    client,
-                    ctx.requestId,
-                    logicalKey,
-                    acquireResult
-                );
-
-                // 7. Commit
-                await client.query('COMMIT');
-                this.logResult(ctx.requestId, logicalKey, cost, attempt, Date.now() - start, acquireResult, false);
-                return acquireResult;
+                return result;
 
             } catch (err: any) {
-                await client.query('ROLLBACK');
-
-                // Retry Logic
+                // Serialization / deadlock errors are Postgres-specific
+                // Redis never throws these (Lua is atomic)
                 if (err.code === '40001' || err.code === '40P01') {
                     if (attempt > this.config.maxRetries) {
-                        this.logger.error('Max retries exhausted for serialization failure', {
-                            requestId: ctx.requestId,
-                            attempts: attempt
-                        });
                         throw new FatalError('Max retries exceeded', err);
                     }
-
                     const backoff = Math.min(
                         this.config.maxBackoffMs,
                         this.config.baseBackoffMs * Math.pow(2, attempt - 1)
@@ -119,13 +72,7 @@ export class AcquireService {
                     continue;
                 }
 
-                this.logger.error('Fatal error during acquire', {
-                    requestId: ctx.requestId,
-                    error: err
-                });
-                throw new FatalError('Database error', err);
-            } finally {
-                client.release();
+                throw new FatalError('Acquire failed', err);
             }
         }
     }

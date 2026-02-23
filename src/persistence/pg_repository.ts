@@ -2,7 +2,9 @@ import { Pool, PoolClient } from 'pg';
 import {
     RateLimitRepository,
     AcquireResultStatus,
+    AcquireResult,
 } from '../domain/types';
+import { calculateTokenConsumption } from '../domain/token_bucket';
 
 // New interface for the SQL-only repository
 export interface SqlRateLimitRepository {
@@ -52,7 +54,7 @@ export interface SqlRateLimitRepository {
     ): Promise<void>;
 }
 
-export class PostgresRateLimitRepository implements SqlRateLimitRepository {
+export class PostgresRateLimitRepository implements SqlRateLimitRepository,RateLimitRepository {
     private pool: Pool;
 
     constructor(connectionString: string) {
@@ -69,6 +71,65 @@ export class PostgresRateLimitRepository implements SqlRateLimitRepository {
         return this.pool;
     }
 
+
+    async acquire(
+    ctx: { requestId: string },
+    logicalKey: string,
+    cost: number,
+    defaultCapacity: number,
+    defaultRefillRate: number
+    ): Promise<AcquireResult> {
+        const client: PoolClient = await this.pool.connect();
+        try{
+            await client.query('BEGIN ISOLATION LEVEL SERIALIZABLE');
+
+            const cached = await this.getIdempotencyKey(client,ctx.requestId);
+            if(cached){
+                await client.query('COMMIT');
+                return cached;
+            }
+
+            let bucket = await this.getBucketForUpdate(client,logicalKey);
+            if (!bucket) {
+            bucket = await this.createBucket(client, logicalKey, {
+                capacity: defaultCapacity,
+                refillRate: defaultRefillRate,
+                now: new Date()
+            });
+            }
+            const result = calculateTokenConsumption(
+                { tokens: bucket.tokens, lastRefillAt: bucket.lastRefillAt },
+                cost,
+                Date.now(),
+                bucket.capacity,
+                bucket.refillRate
+            );
+            await this.updateBucketState(
+                client,
+                logicalKey,
+                result.newTokens,
+                new Date(result.newLastRefillAt)
+            );
+
+            const acquireResult: AcquireResult = {
+                status: result.verdict,
+                tokensRemaining: result.newTokens,
+                waitTimeMs: result.waitTimeMs
+            };
+
+            await this.saveIdempotencyKey(client, ctx.requestId, logicalKey, acquireResult);
+
+            await client.query('COMMIT');
+            return acquireResult;
+        }
+        catch(err: any){
+            await client.query('ROLLBACK');
+            throw err;
+        }finally{
+            client.release();
+        }
+    }
+    
     async getBucketForUpdate(client: PoolClient, key: string) {
         const res = await client.query(
             `SELECT tokens, last_refill_at, capacity, refill_rate 
