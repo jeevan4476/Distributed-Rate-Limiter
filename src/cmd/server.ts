@@ -7,6 +7,7 @@ import { RateLimitDomainService } from '../domain/service';
 import { RateLimitGrpcHandler } from '../transport/grpc_handler';
 import { Logger } from '../domain/types';
 import { AcquireService } from '../service/acquire_service';
+import { RedisRateLimitRepository } from '../persistence/redis_reporistory';
 
 dotenv.config();
 
@@ -31,13 +32,6 @@ async function main() {
     const protoDescriptor = grpc.loadPackageDefinition(packageDefinition) as any;
     const rateLimitProto = protoDescriptor.ratelimit.v1;
 
-    // Config
-    const dbUrl = process.env.DATABASE_URL;
-    if (!dbUrl) {
-        console.error('DATABASE_URL is required');
-        process.exit(1);
-    }
-
     const config = {
         maxRetries: parseInt(process.env.MAX_RETRIES || '3', 10),
         baseBackoffMs: parseInt(process.env.BASE_BACKOFF_MS || '50', 10),
@@ -47,13 +41,33 @@ async function main() {
     };
 
     // Wiring
-    const repo = new PostgresRateLimitRepository(dbUrl);
-    const service = new AcquireService(repo, consoleLogger, config);
+    const backend = process.env.BACKEND || 'postgres';
+    consoleLogger.info(`Starting with backend: ${backend}`);
+    let repo: PostgresRateLimitRepository | RedisRateLimitRepository;
+   
+     if (backend === 'redis') {
+        const redisUrl = process.env.REDIS_URL;
+        if (!redisUrl) {
+            console.error('REDIS_URL is required when BACKEND=redis');
+            process.exit(1);
+        }
+        repo = new RedisRateLimitRepository(redisUrl);
+
+    } else {
+        const dbUrl = process.env.DATABASE_URL;
+        if (!dbUrl) {
+            console.error('DATABASE_URL is required when BACKEND=postgres');
+            process.exit(1);
+        }
+        repo = new PostgresRateLimitRepository(dbUrl);
+    }
+
+    const service = new AcquireService(repo as any, consoleLogger, config);
     const handler = new RateLimitGrpcHandler(service);
 
     const server = new grpc.Server();
 
-    // Note: 'Acquire' matches the rpc name in proto
+    
     server.addService(rateLimitProto.RateLimiter.service, {
         Acquire: handler.acquire,
     });
