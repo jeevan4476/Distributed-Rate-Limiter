@@ -4,7 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "bun test"
+    "test": "bun test",
+    "proto:generate": "bunx protoc --plugin=./node_modules/.bin/protoc-gen-ts_proto --ts_proto_out=./src/proto --ts_proto_opt=outputServices=grpc-js --ts_proto_opt=esModuleInterop=true --proto_path=src/proto src/proto/ratelimit.proto"
   },
   "keywords": [],
   "author": "",

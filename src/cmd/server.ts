@@ -70,6 +70,7 @@ async function main() {
     
     server.addService(rateLimitProto.RateLimiter.service, {
         Acquire: handler.acquire,
+        HealthCheck: handler.healthCheck
     });
 
     const bindAddr = process.env.BIND_ADDR || '0.0.0.0:50051';

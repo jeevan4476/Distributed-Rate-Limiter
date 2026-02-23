@@ -11,6 +11,7 @@ service RateLimiter {
   // - Returns only after the transaction is COMMITTED to the DB.
   // - If the deadline expires, the client MUST assume the result is UNKNOWN (but treated as Denied).
   rpc Acquire(AcquireRequest) returns (AcquireResponse) {}
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse) {}
 }
 
 message AcquireRequest {
@@ -51,4 +52,12 @@ message AcquireResponse {
 
   // metadata for debugging (optional)
   map<string, string> metadata = 4;
+}
+
+message HealthCheckRequest {}
+
+message HealthCheckResponse{
+  string status = 1;
+  int64 uptime = 2;
+  string backend = 3;
 }

@@ -1,15 +1,14 @@
 import * as grpc from '@grpc/grpc-js';
 import { AcquireService } from '../service/acquire_service';
-import { AcquireRequest, AcquireResponse, AcquireResponse_Verdict } from '../proto/ratelimit';
-// Note: Actual import path for proto types depends on protoc output. 
-// Assuming ts-proto generated 'ratelimit.ts' in src/proto
+import { AcquireRequest, AcquireResponse, AcquireResponse_Verdict , HealthCheckRequest,HealthCheckResponse} from '../proto/ratelimit';
+
 
 import { FatalError } from '../domain/types';
 
-// Simple implementation of the gRPC service interface
 export class RateLimitGrpcHandler {
     constructor(private service: AcquireService) { }
-
+    private readonly startTime = Date.now();
+    
     acquire: grpc.handleUnaryCall<AcquireRequest, AcquireResponse> = async (call, callback) => {
         const req = call.request;
 
@@ -69,5 +68,13 @@ export class RateLimitGrpcHandler {
                 details: 'Internal server error',
             });
         }
+    };
+    healthCheck: grpc.handleUnaryCall<HealthCheckRequest,HealthCheckResponse> = (_call,callback) => {
+        const response: HealthCheckResponse = {
+            status: 'healthy',
+            uptime: Math.floor((Date.now()-this.startTime)/1000),
+            backend: process.env.BACKEND || 'postgres'
+        }
+        callback(null,response);
     };
 }
