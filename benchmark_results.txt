@@ -1,4 +1,4 @@
-
+Postgres:
 Scenario 1: Low Contention (1000 reqs, 20 concurrency)
 Total Time: 283.29ms
 Throughput: 3529.93 RPS
@@ -15,3 +15,17 @@ Latency P99: 40.75ms
 
 
 
+Redis:
+Scenario 1: Low Contention (1000 reqs, 20 concurrency)
+Total Time: 68.33ms
+Throughput: 14634.08 RPS
+Latency P50: 1.07ms
+Latency P95: 3.13ms
+Latency P99: 4.02ms
+
+Scenario 2: High Contention (200 reqs, 10 concurrency)
+Total Time: 22.46ms
+Throughput: 8903.97 RPS
+Latency P50: 0.93ms
+Latency P95: 2.65ms
+Latency P99: 2.71ms
