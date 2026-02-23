@@ -5,9 +5,13 @@ services:
     ports:
       - "50051:50051"
     environment:
+      BACKEND: ${BACKEND:-postgres}
       DATABASE_URL: postgres://postgres:postgres@postgres:5432/ratelimiter
+      REDIS_URL: redis://redis:6379
     depends_on:
       postgres:
+        condition: service_healthy
+      redis:
         condition: service_healthy
 
   postgres:
