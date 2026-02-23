@@ -6,8 +6,6 @@ import {
     Logger,
     RateLimitRepository
 } from '../domain/types';
-import { SqlRateLimitRepository } from '../persistence/pg_repository';
-import { calculateTokenConsumption } from '../domain/token_bucket';
 
 export interface RateLimitConfig {
     maxRetries: number;

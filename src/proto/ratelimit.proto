@@ -10,8 +10,14 @@ service RateLimiter {
   // Consistency:
   // - Returns only after the transaction is COMMITTED to the DB.
   // - If the deadline expires, the client MUST assume the result is UNKNOWN (but treated as Denied).
-  rpc Acquire(AcquireRequest) returns (AcquireResponse) {}
-  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse) {}
+  rpc Acquire(AcquireRequest) returns (AcquireResponse);
+  rpc HealthCheck(HealthCheckRequest) returns (HealthCheckResponse);
+}
+
+service Admin {
+  rpc ResetBucket(ResetBucketRequest)     returns (ResetBucketResponse);
+  rpc GetBucketStats(GetBucketStatsRequest) returns (GetBucketStatsResponse);
+  rpc ListBuckets(ListBucketsRequest)     returns (ListBucketsResponse);
 }
 
 message AcquireRequest {
@@ -61,3 +67,18 @@ message HealthCheckResponse{
   int64 uptime = 2;
   string backend = 3;
 }
+
+message ResetBucketRequest  { string key = 1; }
+message ResetBucketResponse { double tokens_after = 1; }
+
+message GetBucketStatsRequest { string key = 1; }
+message GetBucketStatsResponse {
+  string key            = 1;
+  double tokens         = 2;
+  double capacity       = 3;
+  double refill_rate    = 4;
+  double fill_percent   = 5;  // tokens/capacity * 100
+}
+
+message ListBucketsRequest  {}
+message ListBucketsResponse { repeated GetBucketStatsResponse buckets = 1; }

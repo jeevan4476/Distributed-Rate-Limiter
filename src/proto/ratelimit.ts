@@ -116,6 +116,34 @@ export interface HealthCheckResponse {
   backend: string;
 }
 
+export interface ResetBucketRequest {
+  key: string;
+}
+
+export interface ResetBucketResponse {
+  tokensAfter: number;
+}
+
+export interface GetBucketStatsRequest {
+  key: string;
+}
+
+export interface GetBucketStatsResponse {
+  key: string;
+  tokens: number;
+  capacity: number;
+  refillRate: number;
+  /** tokens/capacity * 100 */
+  fillPercent: number;
+}
+
+export interface ListBucketsRequest {
+}
+
+export interface ListBucketsResponse {
+  buckets: GetBucketStatsResponse[];
+}
+
 function createBaseAcquireRequest(): AcquireRequest {
   return { logicalKey: "", cost: 0, requestId: "" };
 }
@@ -568,6 +596,423 @@ export const HealthCheckResponse: MessageFns<HealthCheckResponse> = {
   },
 };
 
+function createBaseResetBucketRequest(): ResetBucketRequest {
+  return { key: "" };
+}
+
+export const ResetBucketRequest: MessageFns<ResetBucketRequest> = {
+  encode(message: ResetBucketRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.key !== "") {
+      writer.uint32(10).string(message.key);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ResetBucketRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseResetBucketRequest();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.key = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): ResetBucketRequest {
+    return { key: isSet(object.key) ? globalThis.String(object.key) : "" };
+  },
+
+  toJSON(message: ResetBucketRequest): unknown {
+    const obj: any = {};
+    if (message.key !== "") {
+      obj.key = message.key;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ResetBucketRequest>, I>>(base?: I): ResetBucketRequest {
+    return ResetBucketRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ResetBucketRequest>, I>>(object: I): ResetBucketRequest {
+    const message = createBaseResetBucketRequest();
+    message.key = object.key ?? "";
+    return message;
+  },
+};
+
+function createBaseResetBucketResponse(): ResetBucketResponse {
+  return { tokensAfter: 0 };
+}
+
+export const ResetBucketResponse: MessageFns<ResetBucketResponse> = {
+  encode(message: ResetBucketResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.tokensAfter !== 0) {
+      writer.uint32(9).double(message.tokensAfter);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ResetBucketResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseResetBucketResponse();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 9) {
+            break;
+          }
+
+          message.tokensAfter = reader.double();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): ResetBucketResponse {
+    return {
+      tokensAfter: isSet(object.tokensAfter)
+        ? globalThis.Number(object.tokensAfter)
+        : isSet(object.tokens_after)
+        ? globalThis.Number(object.tokens_after)
+        : 0,
+    };
+  },
+
+  toJSON(message: ResetBucketResponse): unknown {
+    const obj: any = {};
+    if (message.tokensAfter !== 0) {
+      obj.tokensAfter = message.tokensAfter;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ResetBucketResponse>, I>>(base?: I): ResetBucketResponse {
+    return ResetBucketResponse.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ResetBucketResponse>, I>>(object: I): ResetBucketResponse {
+    const message = createBaseResetBucketResponse();
+    message.tokensAfter = object.tokensAfter ?? 0;
+    return message;
+  },
+};
+
+function createBaseGetBucketStatsRequest(): GetBucketStatsRequest {
+  return { key: "" };
+}
+
+export const GetBucketStatsRequest: MessageFns<GetBucketStatsRequest> = {
+  encode(message: GetBucketStatsRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.key !== "") {
+      writer.uint32(10).string(message.key);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): GetBucketStatsRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseGetBucketStatsRequest();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.key = reader.string();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): GetBucketStatsRequest {
+    return { key: isSet(object.key) ? globalThis.String(object.key) : "" };
+  },
+
+  toJSON(message: GetBucketStatsRequest): unknown {
+    const obj: any = {};
+    if (message.key !== "") {
+      obj.key = message.key;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GetBucketStatsRequest>, I>>(base?: I): GetBucketStatsRequest {
+    return GetBucketStatsRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GetBucketStatsRequest>, I>>(object: I): GetBucketStatsRequest {
+    const message = createBaseGetBucketStatsRequest();
+    message.key = object.key ?? "";
+    return message;
+  },
+};
+
+function createBaseGetBucketStatsResponse(): GetBucketStatsResponse {
+  return { key: "", tokens: 0, capacity: 0, refillRate: 0, fillPercent: 0 };
+}
+
+export const GetBucketStatsResponse: MessageFns<GetBucketStatsResponse> = {
+  encode(message: GetBucketStatsResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    if (message.key !== "") {
+      writer.uint32(10).string(message.key);
+    }
+    if (message.tokens !== 0) {
+      writer.uint32(17).double(message.tokens);
+    }
+    if (message.capacity !== 0) {
+      writer.uint32(25).double(message.capacity);
+    }
+    if (message.refillRate !== 0) {
+      writer.uint32(33).double(message.refillRate);
+    }
+    if (message.fillPercent !== 0) {
+      writer.uint32(41).double(message.fillPercent);
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): GetBucketStatsResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseGetBucketStatsResponse();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.key = reader.string();
+          continue;
+        }
+        case 2: {
+          if (tag !== 17) {
+            break;
+          }
+
+          message.tokens = reader.double();
+          continue;
+        }
+        case 3: {
+          if (tag !== 25) {
+            break;
+          }
+
+          message.capacity = reader.double();
+          continue;
+        }
+        case 4: {
+          if (tag !== 33) {
+            break;
+          }
+
+          message.refillRate = reader.double();
+          continue;
+        }
+        case 5: {
+          if (tag !== 41) {
+            break;
+          }
+
+          message.fillPercent = reader.double();
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): GetBucketStatsResponse {
+    return {
+      key: isSet(object.key) ? globalThis.String(object.key) : "",
+      tokens: isSet(object.tokens) ? globalThis.Number(object.tokens) : 0,
+      capacity: isSet(object.capacity) ? globalThis.Number(object.capacity) : 0,
+      refillRate: isSet(object.refillRate)
+        ? globalThis.Number(object.refillRate)
+        : isSet(object.refill_rate)
+        ? globalThis.Number(object.refill_rate)
+        : 0,
+      fillPercent: isSet(object.fillPercent)
+        ? globalThis.Number(object.fillPercent)
+        : isSet(object.fill_percent)
+        ? globalThis.Number(object.fill_percent)
+        : 0,
+    };
+  },
+
+  toJSON(message: GetBucketStatsResponse): unknown {
+    const obj: any = {};
+    if (message.key !== "") {
+      obj.key = message.key;
+    }
+    if (message.tokens !== 0) {
+      obj.tokens = message.tokens;
+    }
+    if (message.capacity !== 0) {
+      obj.capacity = message.capacity;
+    }
+    if (message.refillRate !== 0) {
+      obj.refillRate = message.refillRate;
+    }
+    if (message.fillPercent !== 0) {
+      obj.fillPercent = message.fillPercent;
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<GetBucketStatsResponse>, I>>(base?: I): GetBucketStatsResponse {
+    return GetBucketStatsResponse.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<GetBucketStatsResponse>, I>>(object: I): GetBucketStatsResponse {
+    const message = createBaseGetBucketStatsResponse();
+    message.key = object.key ?? "";
+    message.tokens = object.tokens ?? 0;
+    message.capacity = object.capacity ?? 0;
+    message.refillRate = object.refillRate ?? 0;
+    message.fillPercent = object.fillPercent ?? 0;
+    return message;
+  },
+};
+
+function createBaseListBucketsRequest(): ListBucketsRequest {
+  return {};
+}
+
+export const ListBucketsRequest: MessageFns<ListBucketsRequest> = {
+  encode(_: ListBucketsRequest, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ListBucketsRequest {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseListBucketsRequest();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(_: any): ListBucketsRequest {
+    return {};
+  },
+
+  toJSON(_: ListBucketsRequest): unknown {
+    const obj: any = {};
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ListBucketsRequest>, I>>(base?: I): ListBucketsRequest {
+    return ListBucketsRequest.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ListBucketsRequest>, I>>(_: I): ListBucketsRequest {
+    const message = createBaseListBucketsRequest();
+    return message;
+  },
+};
+
+function createBaseListBucketsResponse(): ListBucketsResponse {
+  return { buckets: [] };
+}
+
+export const ListBucketsResponse: MessageFns<ListBucketsResponse> = {
+  encode(message: ListBucketsResponse, writer: BinaryWriter = new BinaryWriter()): BinaryWriter {
+    for (const v of message.buckets) {
+      GetBucketStatsResponse.encode(v!, writer.uint32(10).fork()).join();
+    }
+    return writer;
+  },
+
+  decode(input: BinaryReader | Uint8Array, length?: number): ListBucketsResponse {
+    const reader = input instanceof BinaryReader ? input : new BinaryReader(input);
+    const end = length === undefined ? reader.len : reader.pos + length;
+    const message = createBaseListBucketsResponse();
+    while (reader.pos < end) {
+      const tag = reader.uint32();
+      switch (tag >>> 3) {
+        case 1: {
+          if (tag !== 10) {
+            break;
+          }
+
+          message.buckets.push(GetBucketStatsResponse.decode(reader, reader.uint32()));
+          continue;
+        }
+      }
+      if ((tag & 7) === 4 || tag === 0) {
+        break;
+      }
+      reader.skip(tag & 7);
+    }
+    return message;
+  },
+
+  fromJSON(object: any): ListBucketsResponse {
+    return {
+      buckets: globalThis.Array.isArray(object?.buckets)
+        ? object.buckets.map((e: any) => GetBucketStatsResponse.fromJSON(e))
+        : [],
+    };
+  },
+
+  toJSON(message: ListBucketsResponse): unknown {
+    const obj: any = {};
+    if (message.buckets?.length) {
+      obj.buckets = message.buckets.map((e) => GetBucketStatsResponse.toJSON(e));
+    }
+    return obj;
+  },
+
+  create<I extends Exact<DeepPartial<ListBucketsResponse>, I>>(base?: I): ListBucketsResponse {
+    return ListBucketsResponse.fromPartial(base ?? ({} as any));
+  },
+  fromPartial<I extends Exact<DeepPartial<ListBucketsResponse>, I>>(object: I): ListBucketsResponse {
+    const message = createBaseListBucketsResponse();
+    message.buckets = object.buckets?.map((e) => GetBucketStatsResponse.fromPartial(e)) || [];
+    return message;
+  },
+};
+
 export type RateLimiterService = typeof RateLimiterService;
 export const RateLimiterService = {
   /**
@@ -655,6 +1100,99 @@ export const RateLimiterClient = makeGenericClientConstructor(
 ) as unknown as {
   new (address: string, credentials: ChannelCredentials, options?: Partial<ClientOptions>): RateLimiterClient;
   service: typeof RateLimiterService;
+  serviceName: string;
+};
+
+export type AdminService = typeof AdminService;
+export const AdminService = {
+  resetBucket: {
+    path: "/ratelimit.v1.Admin/ResetBucket",
+    requestStream: false,
+    responseStream: false,
+    requestSerialize: (value: ResetBucketRequest): Buffer => Buffer.from(ResetBucketRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): ResetBucketRequest => ResetBucketRequest.decode(value),
+    responseSerialize: (value: ResetBucketResponse): Buffer => Buffer.from(ResetBucketResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer): ResetBucketResponse => ResetBucketResponse.decode(value),
+  },
+  getBucketStats: {
+    path: "/ratelimit.v1.Admin/GetBucketStats",
+    requestStream: false,
+    responseStream: false,
+    requestSerialize: (value: GetBucketStatsRequest): Buffer =>
+      Buffer.from(GetBucketStatsRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): GetBucketStatsRequest => GetBucketStatsRequest.decode(value),
+    responseSerialize: (value: GetBucketStatsResponse): Buffer =>
+      Buffer.from(GetBucketStatsResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer): GetBucketStatsResponse => GetBucketStatsResponse.decode(value),
+  },
+  listBuckets: {
+    path: "/ratelimit.v1.Admin/ListBuckets",
+    requestStream: false,
+    responseStream: false,
+    requestSerialize: (value: ListBucketsRequest): Buffer => Buffer.from(ListBucketsRequest.encode(value).finish()),
+    requestDeserialize: (value: Buffer): ListBucketsRequest => ListBucketsRequest.decode(value),
+    responseSerialize: (value: ListBucketsResponse): Buffer => Buffer.from(ListBucketsResponse.encode(value).finish()),
+    responseDeserialize: (value: Buffer): ListBucketsResponse => ListBucketsResponse.decode(value),
+  },
+} as const;
+
+export interface AdminServer extends UntypedServiceImplementation {
+  resetBucket: handleUnaryCall<ResetBucketRequest, ResetBucketResponse>;
+  getBucketStats: handleUnaryCall<GetBucketStatsRequest, GetBucketStatsResponse>;
+  listBuckets: handleUnaryCall<ListBucketsRequest, ListBucketsResponse>;
+}
+
+export interface AdminClient extends Client {
+  resetBucket(
+    request: ResetBucketRequest,
+    callback: (error: ServiceError | null, response: ResetBucketResponse) => void,
+  ): ClientUnaryCall;
+  resetBucket(
+    request: ResetBucketRequest,
+    metadata: Metadata,
+    callback: (error: ServiceError | null, response: ResetBucketResponse) => void,
+  ): ClientUnaryCall;
+  resetBucket(
+    request: ResetBucketRequest,
+    metadata: Metadata,
+    options: Partial<CallOptions>,
+    callback: (error: ServiceError | null, response: ResetBucketResponse) => void,
+  ): ClientUnaryCall;
+  getBucketStats(
+    request: GetBucketStatsRequest,
+    callback: (error: ServiceError | null, response: GetBucketStatsResponse) => void,
+  ): ClientUnaryCall;
+  getBucketStats(
+    request: GetBucketStatsRequest,
+    metadata: Metadata,
+    callback: (error: ServiceError | null, response: GetBucketStatsResponse) => void,
+  ): ClientUnaryCall;
+  getBucketStats(
+    request: GetBucketStatsRequest,
+    metadata: Metadata,
+    options: Partial<CallOptions>,
+    callback: (error: ServiceError | null, response: GetBucketStatsResponse) => void,
+  ): ClientUnaryCall;
+  listBuckets(
+    request: ListBucketsRequest,
+    callback: (error: ServiceError | null, response: ListBucketsResponse) => void,
+  ): ClientUnaryCall;
+  listBuckets(
+    request: ListBucketsRequest,
+    metadata: Metadata,
+    callback: (error: ServiceError | null, response: ListBucketsResponse) => void,
+  ): ClientUnaryCall;
+  listBuckets(
+    request: ListBucketsRequest,
+    metadata: Metadata,
+    options: Partial<CallOptions>,
+    callback: (error: ServiceError | null, response: ListBucketsResponse) => void,
+  ): ClientUnaryCall;
+}
+
+export const AdminClient = makeGenericClientConstructor(AdminService, "ratelimit.v1.Admin") as unknown as {
+  new (address: string, credentials: ChannelCredentials, options?: Partial<ClientOptions>): AdminClient;
+  service: typeof AdminService;
   serviceName: string;
 };
 

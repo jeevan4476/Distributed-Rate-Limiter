@@ -8,6 +8,8 @@ import { RateLimitGrpcHandler } from '../transport/grpc_handler';
 import { Logger } from '../domain/types';
 import { AcquireService } from '../service/acquire_service';
 import { RedisRateLimitRepository } from '../persistence/redis_reporistory';
+import { AdminService } from '../service/admin_service';
+import { AdminGrpcHandler } from '../transport/admin_grpc_handler';
 
 dotenv.config();
 
@@ -64,7 +66,13 @@ async function main() {
 
     const service = new AcquireService(repo as any, consoleLogger, config);
     const handler = new RateLimitGrpcHandler(service);
-
+    
+    const adminService = new AdminService(
+        backend === 'postgres' ? (repo as any).getPool(): null,
+        backend
+    );
+    const adminHandler = new AdminGrpcHandler(adminService);
+    
     const server = new grpc.Server();
 
     
@@ -72,6 +80,12 @@ async function main() {
         Acquire: handler.acquire,
         HealthCheck: handler.healthCheck
     });
+
+    server.addService(rateLimitProto.Admin.service,{
+        ResetBucket: adminHandler.resetBucket,
+        GetBucketStats: adminHandler.getBucketStats,
+        ListBuckets: adminHandler.listBuckets,
+    })
 
     const bindAddr = process.env.BIND_ADDR || '0.0.0.0:50051';
 
