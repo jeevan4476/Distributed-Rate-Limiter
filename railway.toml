@@ -1,0 +1,5 @@
+[deploy]
+startCommand = "bun run src/cmd/server.ts"
+
+[[services]]
+port = 50051
