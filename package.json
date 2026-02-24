@@ -5,7 +5,14 @@
   "main": "index.js",
   "scripts": {
     "test": "bun test",
-    "proto:generate": "bunx protoc --plugin=./node_modules/.bin/protoc-gen-ts_proto --ts_proto_out=./src/proto --ts_proto_opt=outputServices=grpc-js --ts_proto_opt=esModuleInterop=true --proto_path=src/proto src/proto/ratelimit.proto"
+    "dev": "docker compose up -d --build",
+    "dev:redis": "BACKEND=redis docker compose up -d --build",
+    "dev:logs": "docker compose logs -f app",
+    "dev:down": "docker compose down",
+    "proto:generate": "bunx protoc --plugin=./node_modules/.bin/protoc-gen-ts_proto --ts_proto_out=./src/proto --ts_proto_opt=outputServices=grpc-js --ts_proto_opt=esModuleInterop=true --proto_path=src/proto src/proto/ratelimit.proto",
+    "demo": "./demo.sh",
+    "example:basic": "bun run examples/basic_usage.ts",
+    "example:burst": "bun run examples/burst_demo.ts"
   },
   "keywords": [],
   "author": "",
