@@ -87,7 +87,8 @@ async function main() {
         ListBuckets: adminHandler.listBuckets,
     })
 
-    const bindAddr = process.env.BIND_ADDR || '0.0.0.0:50051';
+    const port = process.env.PORT || '50051';
+    const bindAddr = process.env.BIND_ADDR || `0.0.0.0:${port}`;
 
     server.bindAsync(bindAddr, grpc.ServerCredentials.createInsecure(), (err, port) => {
         if (err) {
