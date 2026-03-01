@@ -21,7 +21,7 @@ const consoleLogger: Logger = {
 };
 
 async function main() {
-    const PROTO_PATH = path.resolve(__dirname, '../proto/ratelimit.proto');
+    const PROTO_PATH = path.resolve(__dirname, '../../proto/ratelimit.proto');
 
     // Load Proto
     const packageDefinition = protoLoader.loadSync(PROTO_PATH, {

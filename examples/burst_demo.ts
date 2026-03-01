@@ -5,7 +5,7 @@ import { v4 as uuidv4 } from 'uuid';
 
 const pkg = grpc.loadPackageDefinition(
     protoLoader.loadSync(
-        path.resolve(__dirname, '../src/proto/ratelimit.proto'),  
+        path.resolve(__dirname, '../proto/ratelimit.proto'),
         { keepCase: false, longs: String, enums: String, defaults: true, oneofs: true }
     )
 ) as any;
