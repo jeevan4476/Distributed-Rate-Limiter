@@ -4,7 +4,7 @@ import path from 'path';
 import { randomUUID } from 'crypto';
 
 
-const PROTO_PATH = path.resolve(__dirname, '../../proto/ratelimit.proto');
+const PROTO_PATH = path.resolve(process.cwd(), 'proto/ratelimit.proto');
 const packageDefinition = protoLoader.loadSync(PROTO_PATH,{
     keepCase: false,
     longs: String,
