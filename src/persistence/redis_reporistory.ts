@@ -35,16 +35,12 @@ export class RedisRateLimitRepository implements RateLimitRepository{
                 Date.now(),
                 cost
             );
-            const obj = {} as any;
-            for(let i = 0 ;i<raw.length;i+=2){
-                obj[raw[i]] = raw[i+1];
-            }
-            
+            // Positional array indexing: [0] = status, [1] = tokens_remaining, [2] = wait_time_ms
             return {
-            status: obj["status"] as AcquireResultStatus,
-            tokensRemaining: parseFloat(obj["tokens_remaining"]),
-            waitTimeMs: parseInt(obj["wait_time_ms"], 10)
-        };
+                status: raw[0] as AcquireResultStatus,
+                tokensRemaining: parseFloat(raw[1]),
+                waitTimeMs: parseInt(raw[2], 10)
+            };
         }catch(err){
             throw new FatalError("Redis acquire failed",err);
         }

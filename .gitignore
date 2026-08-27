@@ -34,3 +34,11 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 .DS_Store
 
 target/
+
+# profiling artifacts
+profiles/perf.data*
+profiles/*.perf
+profiles/*.folded
+profiles/*.cpuprofile
+profiles/*.heapsnapshot
+tools/FlameGraph/

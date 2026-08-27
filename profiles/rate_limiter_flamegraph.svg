@@ -1,0 +1,1734 @@
+<?xml version="1.0" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg version="1.1" width="1200" height="710" onload="init(evt)" viewBox="0 0 1200 710" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<!-- Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples. -->
+<!-- NOTES:  -->
+<defs>
+	<linearGradient id="background" y1="0" y2="1" x1="0" x2="0" >
+		<stop stop-color="#eeeeee" offset="5%" />
+		<stop stop-color="#eeeeb0" offset="95%" />
+	</linearGradient>
+</defs>
+<style type="text/css">
+	text { font-family:Verdana; font-size:12px; fill:rgb(0,0,0); }
+	#search, #ignorecase { opacity:0.1; cursor:pointer; }
+	#search:hover, #search.show, #ignorecase:hover, #ignorecase.show { opacity:1; }
+	#subtitle { text-anchor:middle; font-color:rgb(160,160,160); }
+	#title { text-anchor:middle; font-size:17px}
+	#unzoom { cursor:pointer; }
+	#frames > *:hover { stroke:black; stroke-width:0.5; cursor:pointer; }
+	.hide { display:none; }
+	.parent { opacity:0.5; }
+</style>
+<script type="text/ecmascript">
+<![CDATA[
+	"use strict";
+	var details, searchbtn, unzoombtn, matchedtxt, svg, searching, currentSearchTerm, ignorecase, ignorecaseBtn;
+	function init(evt) {
+		details = document.getElementById("details").firstChild;
+		searchbtn = document.getElementById("search");
+		ignorecaseBtn = document.getElementById("ignorecase");
+		unzoombtn = document.getElementById("unzoom");
+		matchedtxt = document.getElementById("matched");
+		svg = document.getElementsByTagName("svg")[0];
+		searching = 0;
+		currentSearchTerm = null;
+
+		// use GET parameters to restore a flamegraphs state.
+		var params = get_params();
+		if (params.x && params.y)
+			zoom(find_group(document.querySelector('[x="' + params.x + '"][y="' + params.y + '"]')));
+                if (params.s) search(params.s);
+	}
+
+	// event listeners
+	window.addEventListener("click", function(e) {
+		var target = find_group(e.target);
+		if (target) {
+			if (target.nodeName == "a") {
+				if (e.ctrlKey === false) return;
+				e.preventDefault();
+			}
+			if (target.classList.contains("parent")) unzoom(true);
+			zoom(target);
+			if (!document.querySelector('.parent')) {
+				// we have basically done a clearzoom so clear the url
+				var params = get_params();
+				if (params.x) delete params.x;
+				if (params.y) delete params.y;
+				history.replaceState(null, null, parse_params(params));
+				unzoombtn.classList.add("hide");
+				return;
+			}
+
+			// set parameters for zoom state
+			var el = target.querySelector("rect");
+			if (el && el.attributes && el.attributes.y && el.attributes._orig_x) {
+				var params = get_params()
+				params.x = el.attributes._orig_x.value;
+				params.y = el.attributes.y.value;
+				history.replaceState(null, null, parse_params(params));
+			}
+		}
+		else if (e.target.id == "unzoom") clearzoom();
+		else if (e.target.id == "search") search_prompt();
+		else if (e.target.id == "ignorecase") toggle_ignorecase();
+	}, false)
+
+	// mouse-over for info
+	// show
+	window.addEventListener("mouseover", function(e) {
+		var target = find_group(e.target);
+		if (target) details.nodeValue = "Function: " + g_to_text(target);
+	}, false)
+
+	// clear
+	window.addEventListener("mouseout", function(e) {
+		var target = find_group(e.target);
+		if (target) details.nodeValue = ' ';
+	}, false)
+
+	// ctrl-F for search
+	// ctrl-I to toggle case-sensitive search
+	window.addEventListener("keydown",function (e) {
+		if (e.keyCode === 114 || (e.ctrlKey && e.keyCode === 70)) {
+			e.preventDefault();
+			search_prompt();
+		}
+		else if (e.ctrlKey && e.keyCode === 73) {
+			e.preventDefault();
+			toggle_ignorecase();
+		}
+	}, false)
+
+	// functions
+	function get_params() {
+		var params = {};
+		var paramsarr = window.location.search.substr(1).split('&');
+		for (var i = 0; i < paramsarr.length; ++i) {
+			var tmp = paramsarr[i].split("=");
+			if (!tmp[0] || !tmp[1]) continue;
+			params[tmp[0]]  = decodeURIComponent(tmp[1]);
+		}
+		return params;
+	}
+	function parse_params(params) {
+		var uri = "?";
+		for (var key in params) {
+			uri += key + '=' + encodeURIComponent(params[key]) + '&';
+		}
+		if (uri.slice(-1) == "&")
+			uri = uri.substring(0, uri.length - 1);
+		if (uri == '?')
+			uri = window.location.href.split('?')[0];
+		return uri;
+	}
+	function find_child(node, selector) {
+		var children = node.querySelectorAll(selector);
+		if (children.length) return children[0];
+	}
+	function find_group(node) {
+		var parent = node.parentElement;
+		if (!parent) return;
+		if (parent.id == "frames") return node;
+		return find_group(parent);
+	}
+	function orig_save(e, attr, val) {
+		if (e.attributes["_orig_" + attr] != undefined) return;
+		if (e.attributes[attr] == undefined) return;
+		if (val == undefined) val = e.attributes[attr].value;
+		e.setAttribute("_orig_" + attr, val);
+	}
+	function orig_load(e, attr) {
+		if (e.attributes["_orig_"+attr] == undefined) return;
+		e.attributes[attr].value = e.attributes["_orig_" + attr].value;
+		e.removeAttribute("_orig_"+attr);
+	}
+	function g_to_text(e) {
+		var text = find_child(e, "title").firstChild.nodeValue;
+		return (text)
+	}
+	function g_to_func(e) {
+		var func = g_to_text(e);
+		// if there's any manipulation we want to do to the function
+		// name before it's searched, do it here before returning.
+		return (func);
+	}
+	function update_text(e) {
+		var r = find_child(e, "rect");
+		var t = find_child(e, "text");
+		var w = parseFloat(r.attributes.width.value) -3;
+		var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+		t.attributes.x.value = parseFloat(r.attributes.x.value) + 3;
+
+		// Smaller than this size won't fit anything
+		if (w < 2 * 12 * 0.59) {
+			t.textContent = "";
+			return;
+		}
+
+		t.textContent = txt;
+		var sl = t.getSubStringLength(0, txt.length);
+		// check if only whitespace or if we can fit the entire string into width w
+		if (/^ *$/.test(txt) || sl < w)
+			return;
+
+		// this isn't perfect, but gives a good starting point
+		// and avoids calling getSubStringLength too often
+		var start = Math.floor((w/sl) * txt.length);
+		for (var x = start; x > 0; x = x-2) {
+			if (t.getSubStringLength(0, x + 2) <= w) {
+				t.textContent = txt.substring(0, x) + "..";
+				return;
+			}
+		}
+		t.textContent = "";
+	}
+
+	// zoom
+	function zoom_reset(e) {
+		if (e.attributes != undefined) {
+			orig_load(e, "x");
+			orig_load(e, "width");
+		}
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_reset(c[i]);
+		}
+	}
+	function zoom_child(e, x, ratio) {
+		if (e.attributes != undefined) {
+			if (e.attributes.x != undefined) {
+				orig_save(e, "x");
+				e.attributes.x.value = (parseFloat(e.attributes.x.value) - x - 10) * ratio + 10;
+				if (e.tagName == "text")
+					e.attributes.x.value = find_child(e.parentNode, "rect[x]").attributes.x.value + 3;
+			}
+			if (e.attributes.width != undefined) {
+				orig_save(e, "width");
+				e.attributes.width.value = parseFloat(e.attributes.width.value) * ratio;
+			}
+		}
+
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_child(c[i], x - 10, ratio);
+		}
+	}
+	function zoom_parent(e) {
+		if (e.attributes) {
+			if (e.attributes.x != undefined) {
+				orig_save(e, "x");
+				e.attributes.x.value = 10;
+			}
+			if (e.attributes.width != undefined) {
+				orig_save(e, "width");
+				e.attributes.width.value = parseInt(svg.width.baseVal.value) - (10 * 2);
+			}
+		}
+		if (e.childNodes == undefined) return;
+		for (var i = 0, c = e.childNodes; i < c.length; i++) {
+			zoom_parent(c[i]);
+		}
+	}
+	function zoom(node) {
+		var attr = find_child(node, "rect").attributes;
+		var width = parseFloat(attr.width.value);
+		var xmin = parseFloat(attr.x.value);
+		var xmax = parseFloat(xmin + width);
+		var ymin = parseFloat(attr.y.value);
+		var ratio = (svg.width.baseVal.value - 2 * 10) / width;
+
+		// XXX: Workaround for JavaScript float issues (fix me)
+		var fudge = 0.0001;
+
+		unzoombtn.classList.remove("hide");
+
+		var el = document.getElementById("frames").children;
+		for (var i = 0; i < el.length; i++) {
+			var e = el[i];
+			var a = find_child(e, "rect").attributes;
+			var ex = parseFloat(a.x.value);
+			var ew = parseFloat(a.width.value);
+			var upstack;
+			// Is it an ancestor
+			if (0 == 0) {
+				upstack = parseFloat(a.y.value) > ymin;
+			} else {
+				upstack = parseFloat(a.y.value) < ymin;
+			}
+			if (upstack) {
+				// Direct ancestor
+				if (ex <= xmin && (ex+ew+fudge) >= xmax) {
+					e.classList.add("parent");
+					zoom_parent(e);
+					update_text(e);
+				}
+				// not in current path
+				else
+					e.classList.add("hide");
+			}
+			// Children maybe
+			else {
+				// no common path
+				if (ex < xmin || ex + fudge >= xmax) {
+					e.classList.add("hide");
+				}
+				else {
+					zoom_child(e, xmin, ratio);
+					update_text(e);
+				}
+			}
+		}
+		search();
+	}
+	function unzoom(dont_update_text) {
+		unzoombtn.classList.add("hide");
+		var el = document.getElementById("frames").children;
+		for(var i = 0; i < el.length; i++) {
+			el[i].classList.remove("parent");
+			el[i].classList.remove("hide");
+			zoom_reset(el[i]);
+			if(!dont_update_text) update_text(el[i]);
+		}
+		search();
+	}
+	function clearzoom() {
+		unzoom();
+
+		// remove zoom state
+		var params = get_params();
+		if (params.x) delete params.x;
+		if (params.y) delete params.y;
+		history.replaceState(null, null, parse_params(params));
+	}
+
+	// search
+	function toggle_ignorecase() {
+		ignorecase = !ignorecase;
+		if (ignorecase) {
+			ignorecaseBtn.classList.add("show");
+		} else {
+			ignorecaseBtn.classList.remove("show");
+		}
+		reset_search();
+		search();
+	}
+	function reset_search() {
+		var el = document.querySelectorAll("#frames rect");
+		for (var i = 0; i < el.length; i++) {
+			orig_load(el[i], "fill")
+		}
+		var params = get_params();
+		delete params.s;
+		history.replaceState(null, null, parse_params(params));
+	}
+	function search_prompt() {
+		if (!searching) {
+			var term = prompt("Enter a search term (regexp " +
+			    "allowed, eg: ^ext4_)"
+			    + (ignorecase ? ", ignoring case" : "")
+			    + "\nPress Ctrl-i to toggle case sensitivity", "");
+			if (term != null) search(term);
+		} else {
+			reset_search();
+			searching = 0;
+			currentSearchTerm = null;
+			searchbtn.classList.remove("show");
+			searchbtn.firstChild.nodeValue = "Search"
+			matchedtxt.classList.add("hide");
+			matchedtxt.firstChild.nodeValue = ""
+		}
+	}
+	function search(term) {
+		if (term) currentSearchTerm = term;
+		if (currentSearchTerm === null) return;
+
+		var re = new RegExp(currentSearchTerm, ignorecase ? 'i' : '');
+		var el = document.getElementById("frames").children;
+		var matches = new Object();
+		var maxwidth = 0;
+		for (var i = 0; i < el.length; i++) {
+			var e = el[i];
+			var func = g_to_func(e);
+			var rect = find_child(e, "rect");
+			if (func == null || rect == null)
+				continue;
+
+			// Save max width. Only works as we have a root frame
+			var w = parseFloat(rect.attributes.width.value);
+			if (w > maxwidth)
+				maxwidth = w;
+
+			if (func.match(re)) {
+				// highlight
+				var x = parseFloat(rect.attributes.x.value);
+				orig_save(rect, "fill");
+				rect.attributes.fill.value = "rgb(230,0,230)";
+
+				// remember matches
+				if (matches[x] == undefined) {
+					matches[x] = w;
+				} else {
+					if (w > matches[x]) {
+						// overwrite with parent
+						matches[x] = w;
+					}
+				}
+				searching = 1;
+			}
+		}
+		if (!searching)
+			return;
+		var params = get_params();
+		params.s = currentSearchTerm;
+		history.replaceState(null, null, parse_params(params));
+
+		searchbtn.classList.add("show");
+		searchbtn.firstChild.nodeValue = "Reset Search";
+
+		// calculate percent matched, excluding vertical overlap
+		var count = 0;
+		var lastx = -1;
+		var lastw = 0;
+		var keys = Array();
+		for (k in matches) {
+			if (matches.hasOwnProperty(k))
+				keys.push(k);
+		}
+		// sort the matched frames by their x location
+		// ascending, then width descending
+		keys.sort(function(a, b){
+			return a - b;
+		});
+		// Step through frames saving only the biggest bottom-up frames
+		// thanks to the sort order. This relies on the tree property
+		// where children are always smaller than their parents.
+		var fudge = 0.0001;	// JavaScript floating point
+		for (var k in keys) {
+			var x = parseFloat(keys[k]);
+			var w = matches[keys[k]];
+			if (x >= lastx + lastw - fudge) {
+				count += w;
+				lastx = x;
+				lastw = w;
+			}
+		}
+		// display matched percent
+		matchedtxt.classList.remove("hide");
+		var pct = 100 * count / maxwidth;
+		if (pct != 100) pct = pct.toFixed(1)
+		matchedtxt.firstChild.nodeValue = "Matched: " + pct + "%";
+	}
+]]>
+</script>
+<rect x="0.0" y="0" width="1200.0" height="710.0" fill="url(#background)"  />
+<text id="title" x="600.00" y="24" >Distributed Rate Limiter CPU Flame Graph</text>
+<text id="details" x="10.00" y="693" > </text>
+<text id="unzoom" x="10.00" y="24" class="hide">Reset Zoom</text>
+<text id="search" x="1090.00" y="24" >Search</text>
+<text id="ignorecase" x="1174.00" y="24" >ic</text>
+<text id="matched" x="1090.00" y="693" > </text>
+<g id="frames">
+<g >
+<title>anonymous (9 samples, 2.74%)</title><rect x="654.0" y="437" width="32.3" height="15.0" fill="rgb(247,194,46)" rx="2" ry="2" />
+<text  x="656.96" y="447.5" >an..</text>
+</g>
+<g >
+<title>node:assert (5 samples, 1.52%)</title><rect x="445.3" y="309" width="18.0" height="15.0" fill="rgb(212,33,7)" rx="2" ry="2" />
+<text  x="448.30" y="319.5" ></text>
+</g>
+<g >
+<title>bound require (2 samples, 0.61%)</title><rect x="596.4" y="85" width="7.2" height="15.0" fill="rgb(252,218,52)" rx="2" ry="2" />
+<text  x="599.40" y="95.5" ></text>
+</g>
+<g >
+<title>writeOrBuffer (2 samples, 0.61%)</title><rect x="776.3" y="501" width="7.2" height="15.0" fill="rgb(242,173,41)" rx="2" ry="2" />
+<text  x="779.28" y="511.5" ></text>
+</g>
+<g >
+<title>sendCommand (42 samples, 12.80%)</title><rect x="981.3" y="533" width="151.1" height="15.0" fill="rgb(220,70,16)" rx="2" ry="2" />
+<text  x="984.34" y="543.5" >sendCommand</text>
+</g>
+<g >
+<title>bound require (54 samples, 16.46%)</title><rect x="420.1" y="341" width="194.3" height="15.0" fill="rgb(252,218,52)" rx="2" ry="2" />
+<text  x="423.12" y="351.5" >bound require</text>
+</g>
+<g >
+<title>(anonymous) (1 samples, 0.30%)</title><rect x="420.1" y="325" width="3.6" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="423.12" y="335.5" ></text>
+</g>
+<g >
+<title>node:crypto (2 samples, 0.61%)</title><rect x="463.3" y="309" width="7.2" height="15.0" fill="rgb(215,47,11)" rx="2" ry="2" />
+<text  x="466.29" y="319.5" ></text>
+</g>
+<g >
+<title>worker (58 samples, 17.68%)</title><rect x="938.2" y="613" width="208.6" height="15.0" fill="rgb(211,28,6)" rx="2" ry="2" />
+<text  x="941.17" y="623.5" >worker</text>
+</g>
+<g >
+<title>getColorDepth (1 samples, 0.30%)</title><rect x="459.7" y="149" width="3.6" height="15.0" fill="rgb(208,18,4)" rx="2" ry="2" />
+<text  x="462.70" y="159.5" ></text>
+</g>
+<g >
+<title>maybeReadMore_ (1 samples, 0.30%)</title><rect x="1182.8" y="629" width="3.6" height="15.0" fill="rgb(243,178,42)" rx="2" ry="2" />
+<text  x="1185.80" y="639.5" ></text>
+</g>
+<g >
+<title>catch (1 samples, 0.30%)</title><rect x="974.1" y="517" width="3.6" height="15.0" fill="rgb(236,145,34)" rx="2" ry="2" />
+<text  x="977.15" y="527.5" ></text>
+</g>
+<g >
+<title>anonymous (1 samples, 0.30%)</title><rect x="470.5" y="293" width="3.6" height="15.0" fill="rgb(247,194,46)" rx="2" ry="2" />
+<text  x="473.49" y="303.5" ></text>
+</g>
+<g >
+<title>get (1 samples, 0.30%)</title><rect x="1118.0" y="501" width="3.6" height="15.0" fill="rgb(246,190,45)" rx="2" ry="2" />
+<text  x="1121.05" y="511.5" ></text>
+</g>
+<g >
+<title>anonymous (14 samples, 4.27%)</title><rect x="643.2" y="533" width="50.3" height="15.0" fill="rgb(247,194,46)" rx="2" ry="2" />
+<text  x="646.17" y="543.5" >anony..</text>
+</g>
+<g >
+<title>transformReply (3 samples, 0.91%)</title><rect x="1150.4" y="485" width="10.8" height="15.0" fill="rgb(246,189,45)" rx="2" ry="2" />
+<text  x="1153.43" y="495.5" ></text>
+</g>
+<g >
+<title>readableAddChunkPushByteMode (1 samples, 0.30%)</title><rect x="751.1" y="629" width="3.6" height="15.0" fill="rgb(208,14,3)" rx="2" ry="2" />
+<text  x="754.10" y="639.5" ></text>
+</g>
+<g >
+<title>bound afterConnectMultiple (5 samples, 1.52%)</title><rect x="765.5" y="629" width="18.0" height="15.0" fill="rgb(206,5,1)" rx="2" ry="2" />
+<text  x="768.49" y="639.5" ></text>
+</g>
+<g >
+<title>(module) (7 samples, 2.13%)</title><rect x="844.6" y="549" width="25.2" height="15.0" fill="rgb(217,56,13)" rx="2" ry="2" />
+<text  x="847.63" y="559.5" >(..</text>
+</g>
+<g >
+<title>Socket (1 samples, 0.30%)</title><rect x="833.8" y="597" width="3.6" height="15.0" fill="rgb(227,104,25)" rx="2" ry="2" />
+<text  x="836.84" y="607.5" ></text>
+</g>
+<g >
+<title>(anonymous) (5 samples, 1.52%)</title><rect x="790.7" y="613" width="18.0" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="793.67" y="623.5" ></text>
+</g>
+<g >
+<title>filter (1 samples, 0.30%)</title><rect x="229.5" y="373" width="3.5" height="15.0" fill="rgb(240,163,39)" rx="2" ry="2" />
+<text  x="232.45" y="383.5" ></text>
+</g>
+<g >
+<title>(anonymous) (1 samples, 0.30%)</title><rect x="517.3" y="261" width="3.6" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="520.26" y="271.5" ></text>
+</g>
+<g >
+<title>acquire (1 samples, 0.30%)</title><rect x="934.6" y="533" width="3.6" height="15.0" fill="rgb(244,181,43)" rx="2" ry="2" />
+<text  x="937.57" y="543.5" ></text>
+</g>
+<g >
+<title>acquire (3 samples, 0.91%)</title><rect x="808.7" y="613" width="10.8" height="15.0" fill="rgb(244,181,43)" rx="2" ry="2" />
+<text  x="811.66" y="623.5" ></text>
+</g>
+<g >
+<title>writeOrBuffer (5 samples, 1.52%)</title><rect x="884.2" y="501" width="18.0" height="15.0" fill="rgb(242,173,41)" rx="2" ry="2" />
+<text  x="887.21" y="511.5" ></text>
+</g>
+<g >
+<title>sendCommand (8 samples, 2.44%)</title><rect x="880.6" y="533" width="28.8" height="15.0" fill="rgb(220,70,16)" rx="2" ry="2" />
+<text  x="883.61" y="543.5" >se..</text>
+</g>
+<g >
+<title>execute (6 samples, 1.83%)</title><rect x="1146.8" y="549" width="21.6" height="15.0" fill="rgb(236,144,34)" rx="2" ry="2" />
+<text  x="1149.83" y="559.5" >e..</text>
+</g>
+<g >
+<title>get (5 samples, 1.52%)</title><rect x="445.3" y="277" width="18.0" height="15.0" fill="rgb(246,190,45)" rx="2" ry="2" />
+<text  x="448.30" y="287.5" ></text>
+</g>
+<g >
+<title>writeBuffered (30 samples, 9.15%)</title><rect x="1006.5" y="469" width="108.0" height="15.0" fill="rgb(241,165,39)" rx="2" ry="2" />
+<text  x="1009.52" y="479.5" >writeBuffered</text>
+</g>
+<g >
+<title>bound call (1 samples, 0.30%)</title><rect x="229.5" y="389" width="3.5" height="15.0" fill="rgb(232,128,30)" rx="2" ry="2" />
+<text  x="232.45" y="399.5" ></text>
+</g>
+<g >
+<title>connect (1 samples, 0.30%)</title><rect x="848.2" y="469" width="3.6" height="15.0" fill="rgb(244,181,43)" rx="2" ry="2" />
+<text  x="851.23" y="479.5" ></text>
+</g>
+<g >
+<title>parseArrayElements (1 samples, 0.30%)</title><rect x="1146.8" y="533" width="3.6" height="15.0" fill="rgb(225,93,22)" rx="2" ry="2" />
+<text  x="1149.83" y="543.5" ></text>
+</g>
+<g >
+<title>loadAndEvaluateModule (2 samples, 0.61%)</title><rect x="758.3" y="629" width="7.2" height="15.0" fill="rgb(216,54,13)" rx="2" ry="2" />
+<text  x="761.29" y="639.5" ></text>
+</g>
+<g >
+<title>randomUUID (1 samples, 0.30%)</title><rect x="920.2" y="597" width="3.6" height="15.0" fill="rgb(213,40,9)" rx="2" ry="2" />
+<text  x="923.18" y="607.5" ></text>
+</g>
+<g >
+<title>anonymous (12 samples, 3.66%)</title><rect x="646.8" y="469" width="43.1" height="15.0" fill="rgb(247,194,46)" rx="2" ry="2" />
+<text  x="649.77" y="479.5" >anon..</text>
+</g>
+<g >
+<title>moduleEvaluation (8 samples, 2.44%)</title><rect x="844.6" y="597" width="28.8" height="15.0" fill="rgb(220,71,17)" rx="2" ry="2" />
+<text  x="847.63" y="607.5" >mo..</text>
+</g>
+<g >
+<title>internal:streams/destroy (1 samples, 0.30%)</title><rect x="657.6" y="389" width="3.6" height="15.0" fill="rgb(242,173,41)" rx="2" ry="2" />
+<text  x="660.56" y="399.5" ></text>
+</g>
+<g >
+<title>acquire (52 samples, 15.85%)</title><rect x="945.4" y="549" width="187.0" height="15.0" fill="rgb(244,181,43)" rx="2" ry="2" />
+<text  x="948.37" y="559.5" >acquire</text>
+</g>
+<g >
+<title>apply (1 samples, 0.30%)</title><rect x="851.8" y="357" width="3.6" height="15.0" fill="rgb(210,25,6)" rx="2" ry="2" />
+<text  x="854.83" y="367.5" ></text>
+</g>
+<g >
+<title>_onceWrap (1 samples, 0.30%)</title><rect x="805.1" y="549" width="3.6" height="15.0" fill="rgb(231,122,29)" rx="2" ry="2" />
+<text  x="808.06" y="559.5" ></text>
+</g>
+<g >
+<title>(anonymous) (1 samples, 0.30%)</title><rect x="416.5" y="341" width="3.6" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="419.52" y="351.5" ></text>
+</g>
+<g >
+<title>randomUUID (2 samples, 0.61%)</title><rect x="1139.6" y="597" width="7.2" height="15.0" fill="rgb(213,40,9)" rx="2" ry="2" />
+<text  x="1142.63" y="607.5" ></text>
+</g>
+<g >
+<title>defineProperty (1 samples, 0.30%)</title><rect x="689.9" y="501" width="3.6" height="15.0" fill="rgb(251,212,50)" rx="2" ry="2" />
+<text  x="692.94" y="511.5" ></text>
+</g>
+<g >
+<title>internal:primordials (2 samples, 0.61%)</title><rect x="718.7" y="517" width="7.2" height="15.0" fill="rgb(239,159,38)" rx="2" ry="2" />
+<text  x="721.72" y="527.5" ></text>
+</g>
+<g >
+<title>require (1 samples, 0.30%)</title><rect x="607.2" y="117" width="3.6" height="15.0" fill="rgb(221,76,18)" rx="2" ry="2" />
+<text  x="610.20" y="127.5" ></text>
+</g>
+<g >
+<title>(anonymous) (1 samples, 0.30%)</title><rect x="801.5" y="565" width="3.6" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="804.46" y="575.5" ></text>
+</g>
+<g >
+<title>(anonymous) (1 samples, 0.30%)</title><rect x="182.7" y="453" width="3.6" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="185.68" y="463.5" ></text>
+</g>
+<g >
+<title>_write (1 samples, 0.30%)</title><rect x="779.9" y="485" width="3.6" height="15.0" fill="rgb(214,44,10)" rx="2" ry="2" />
+<text  x="782.88" y="495.5" ></text>
+</g>
+<g >
+<title>acquire (11 samples, 3.35%)</title><rect x="873.4" y="597" width="39.6" height="15.0" fill="rgb(244,181,43)" rx="2" ry="2" />
+<text  x="876.41" y="607.5" >acq..</text>
+</g>
+<g >
+<title>driveAsyncFunction (1 samples, 0.30%)</title><rect x="909.4" y="549" width="3.6" height="15.0" fill="rgb(230,115,27)" rx="2" ry="2" />
+<text  x="912.39" y="559.5" ></text>
+</g>
+<g >
+<title>afterConnectMultiple (5 samples, 1.52%)</title><rect x="765.5" y="613" width="18.0" height="15.0" fill="rgb(225,93,22)" rx="2" ry="2" />
+<text  x="768.49" y="623.5" ></text>
+</g>
+<g >
+<title>applyMixin (1 samples, 0.30%)</title><rect x="179.1" y="469" width="3.6" height="15.0" fill="rgb(220,72,17)" rx="2" ry="2" />
+<text  x="182.09" y="479.5" ></text>
+</g>
+<g >
+<title>returnReply (5 samples, 1.52%)</title><rect x="1150.4" y="517" width="18.0" height="15.0" fill="rgb(237,149,35)" rx="2" ry="2" />
+<text  x="1153.43" y="527.5" ></text>
+</g>
+<g >
+<title>open (5 samples, 1.52%)</title><rect x="765.5" y="645" width="18.0" height="15.0" fill="rgb(209,22,5)" rx="2" ry="2" />
+<text  x="768.49" y="655.5" ></text>
+</g>
+<g >
+<title>bound require (4 samples, 1.22%)</title><rect x="589.2" y="149" width="14.4" height="15.0" fill="rgb(252,218,52)" rx="2" ry="2" />
+<text  x="592.21" y="159.5" ></text>
+</g>
+<g >
+<title>worker (1 samples, 0.30%)</title><rect x="934.6" y="549" width="3.6" height="15.0" fill="rgb(211,28,6)" rx="2" ry="2" />
+<text  x="937.57" y="559.5" ></text>
+</g>
+<g >
+<title>anonymous (14 samples, 4.27%)</title><rect x="423.7" y="325" width="50.4" height="15.0" fill="rgb(247,194,46)" rx="2" ry="2" />
+<text  x="426.72" y="335.5" >anony..</text>
+</g>
+<g >
+<title>initPromise (3 samples, 0.91%)</title><rect x="963.4" y="485" width="10.7" height="15.0" fill="rgb(249,202,48)" rx="2" ry="2" />
+<text  x="966.35" y="495.5" ></text>
+</g>
+<g >
+<title>requestInstantiate (4 samples, 1.22%)</title><rect x="725.9" y="613" width="14.4" height="15.0" fill="rgb(226,99,23)" rx="2" ry="2" />
+<text  x="728.91" y="623.5" ></text>
+</g>
+<g >
+<title>printStats (1 samples, 0.30%)</title><rect x="916.6" y="597" width="3.6" height="15.0" fill="rgb(211,27,6)" rx="2" ry="2" />
+<text  x="919.59" y="607.5" ></text>
+</g>
+<g >
+<title>(anonymous) (4 samples, 1.22%)</title><rect x="725.9" y="581" width="14.4" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="728.91" y="591.5" ></text>
+</g>
+<g >
+<title>(anonymous) (1 samples, 0.30%)</title><rect x="747.5" y="629" width="3.6" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="750.50" y="639.5" ></text>
+</g>
+<g >
+<title>internal:stream (14 samples, 4.27%)</title><rect x="643.2" y="517" width="50.3" height="15.0" fill="rgb(215,46,11)" rx="2" ry="2" />
+<text  x="646.17" y="527.5" >inter..</text>
+</g>
+<g >
+<title>acquire (2 samples, 0.61%)</title><rect x="862.6" y="501" width="7.2" height="15.0" fill="rgb(244,181,43)" rx="2" ry="2" />
+<text  x="865.62" y="511.5" ></text>
+</g>
+<g >
+<title>internal:streams/operators (12 samples, 3.66%)</title><rect x="646.8" y="485" width="43.1" height="15.0" fill="rgb(216,54,12)" rx="2" ry="2" />
+<text  x="649.77" y="495.5" >inte..</text>
+</g>
+<g >
+<title>parseModule (1 samples, 0.30%)</title><rect x="794.3" y="597" width="3.6" height="15.0" fill="rgb(215,47,11)" rx="2" ry="2" />
+<text  x="797.27" y="607.5" ></text>
+</g>
+<g >
+<title>anonymous (1 samples, 0.30%)</title><rect x="686.3" y="437" width="3.6" height="15.0" fill="rgb(247,194,46)" rx="2" ry="2" />
+<text  x="689.34" y="447.5" ></text>
+</g>
+<g >
+<title>anonymous (4 samples, 1.22%)</title><rect x="589.2" y="117" width="14.4" height="15.0" fill="rgb(247,194,46)" rx="2" ry="2" />
+<text  x="592.21" y="127.5" ></text>
+</g>
+<g >
+<title>evaluate (7 samples, 2.13%)</title><rect x="844.6" y="565" width="25.2" height="15.0" fill="rgb(240,162,38)" rx="2" ry="2" />
+<text  x="847.63" y="575.5" >e..</text>
+</g>
+<g >
+<title>acquire (9 samples, 2.74%)</title><rect x="877.0" y="549" width="32.4" height="15.0" fill="rgb(244,181,43)" rx="2" ry="2" />
+<text  x="880.01" y="559.5" >ac..</text>
+</g>
+<g >
+<title>finishMaybe (1 samples, 0.30%)</title><rect x="1175.6" y="597" width="3.6" height="15.0" fill="rgb(231,122,29)" rx="2" ry="2" />
+<text  x="1178.61" y="607.5" ></text>
+</g>
+<g >
+<title>endNT (1 samples, 0.30%)</title><rect x="1172.0" y="629" width="3.6" height="15.0" fill="rgb(208,13,3)" rx="2" ry="2" />
+<text  x="1175.01" y="639.5" ></text>
+</g>
+<g >
+<title>resolve (1 samples, 0.30%)</title><rect x="740.3" y="629" width="3.6" height="15.0" fill="rgb(252,217,52)" rx="2" ry="2" />
+<text  x="743.30" y="639.5" ></text>
+</g>
+<g >
+<title>(anonymous) (4 samples, 1.22%)</title><rect x="725.9" y="597" width="14.4" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="728.91" y="607.5" ></text>
+</g>
+<g >
+<title>(anonymous) (1 samples, 0.30%)</title><rect x="851.8" y="373" width="3.6" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="854.83" y="383.5" ></text>
+</g>
+<g >
+<title>(anonymous) (58 samples, 17.68%)</title><rect x="409.3" y="357" width="208.7" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="412.33" y="367.5" >(anonymous)</text>
+</g>
+<g >
+<title>_unrefTimer (1 samples, 0.30%)</title><rect x="765.5" y="581" width="3.6" height="15.0" fill="rgb(221,77,18)" rx="2" ry="2" />
+<text  x="768.49" y="591.5" ></text>
+</g>
+<g >
+<title>evaluate (1 samples, 0.30%)</title><rect x="869.8" y="533" width="3.6" height="15.0" fill="rgb(240,162,38)" rx="2" ry="2" />
+<text  x="872.82" y="543.5" ></text>
+</g>
+<g >
+<title>Promise (1 samples, 0.30%)</title><rect x="848.2" y="453" width="3.6" height="15.0" fill="rgb(215,48,11)" rx="2" ry="2" />
+<text  x="851.23" y="463.5" ></text>
+</g>
+<g >
+<title>bound onceWrapper (4 samples, 1.22%)</title><rect x="769.1" y="565" width="14.4" height="15.0" fill="rgb(213,40,9)" rx="2" ry="2" />
+<text  x="772.09" y="575.5" ></text>
+</g>
+<g >
+<title>require (39 samples, 11.89%)</title><rect x="474.1" y="325" width="140.3" height="15.0" fill="rgb(221,76,18)" rx="2" ry="2" />
+<text  x="477.09" y="335.5" >require</text>
+</g>
+<g >
+<title>parseOptions (2 samples, 0.61%)</title><rect x="851.8" y="469" width="7.2" height="15.0" fill="rgb(249,205,49)" rx="2" ry="2" />
+<text  x="854.83" y="479.5" ></text>
+</g>
+<g >
+<title>internal:streams/compose (9 samples, 2.74%)</title><rect x="654.0" y="453" width="32.3" height="15.0" fill="rgb(221,78,18)" rx="2" ry="2" />
+<text  x="656.96" y="463.5" >in..</text>
+</g>
+<g >
+<title>execute (1 samples, 0.30%)</title><rect x="877.0" y="533" width="3.6" height="15.0" fill="rgb(236,144,34)" rx="2" ry="2" />
+<text  x="880.01" y="543.5" ></text>
+</g>
+<g >
+<title>acquire (1 samples, 0.30%)</title><rect x="934.6" y="501" width="3.6" height="15.0" fill="rgb(244,181,43)" rx="2" ry="2" />
+<text  x="937.57" y="511.5" ></text>
+</g>
+<g >
+<title>WriteStream (3 samples, 0.91%)</title><rect x="448.9" y="149" width="10.8" height="15.0" fill="rgb(229,114,27)" rx="2" ry="2" />
+<text  x="451.90" y="159.5" ></text>
+</g>
+<g >
+<title>isIP (1 samples, 0.30%)</title><rect x="826.6" y="581" width="3.6" height="15.0" fill="rgb(254,225,53)" rx="2" ry="2" />
+<text  x="829.65" y="591.5" ></text>
+</g>
+<g >
+<title>now (1 samples, 0.30%)</title><rect x="1136.0" y="597" width="3.6" height="15.0" fill="rgb(217,56,13)" rx="2" ry="2" />
+<text  x="1139.04" y="607.5" ></text>
+</g>
+<g >
+<title>@lazy (1 samples, 0.30%)</title><rect x="466.9" y="293" width="3.6" height="15.0" fill="rgb(206,4,1)" rx="2" ry="2" />
+<text  x="469.89" y="303.5" ></text>
+</g>
+<g >
+<title>validateFamilyOption (1 samples, 0.30%)</title><rect x="830.2" y="533" width="3.6" height="15.0" fill="rgb(244,182,43)" rx="2" ry="2" />
+<text  x="833.24" y="543.5" ></text>
+</g>
+<g >
+<title>update (1 samples, 0.30%)</title><rect x="859.0" y="453" width="3.6" height="15.0" fill="rgb(209,22,5)" rx="2" ry="2" />
+<text  x="862.02" y="463.5" ></text>
+</g>
+<g >
+<title>_destroy (1 samples, 0.30%)</title><rect x="1179.2" y="581" width="3.6" height="15.0" fill="rgb(224,87,20)" rx="2" ry="2" />
+<text  x="1182.21" y="591.5" ></text>
+</g>
+<g >
+<title>node:stream (14 samples, 4.27%)</title><rect x="643.2" y="549" width="50.3" height="15.0" fill="rgb(250,211,50)" rx="2" ry="2" />
+<text  x="646.17" y="559.5" >node:..</text>
+</g>
+<g >
+<title>parse (1 samples, 0.30%)</title><rect x="855.4" y="421" width="3.6" height="15.0" fill="rgb(231,122,29)" rx="2" ry="2" />
+<text  x="858.43" y="431.5" ></text>
+</g>
+<g >
+<title>node:path (4 samples, 1.22%)</title><rect x="711.5" y="613" width="14.4" height="15.0" fill="rgb(241,167,40)" rx="2" ry="2" />
+<text  x="714.52" y="623.5" ></text>
+</g>
+<g >
+<title>(anonymous) (147 samples, 44.82%)</title><rect x="107.1" y="549" width="528.9" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="110.13" y="559.5" >(anonymous)</text>
+</g>
+<g >
+<title>parseURL (2 samples, 0.61%)</title><rect x="851.8" y="453" width="7.2" height="15.0" fill="rgb(211,31,7)" rx="2" ry="2" />
+<text  x="854.83" y="463.5" ></text>
+</g>
+<g >
+<title>reduce (1 samples, 0.30%)</title><rect x="625.2" y="437" width="3.6" height="15.0" fill="rgb(230,119,28)" rx="2" ry="2" />
+<text  x="628.18" y="447.5" ></text>
+</g>
+<g >
+<title>(anonymous) (1 samples, 0.30%)</title><rect x="851.8" y="405" width="3.6" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="854.83" y="415.5" ></text>
+</g>
+<g >
+<title>anonymous (1 samples, 0.30%)</title><rect x="225.9" y="389" width="3.6" height="15.0" fill="rgb(247,194,46)" rx="2" ry="2" />
+<text  x="228.85" y="399.5" ></text>
+</g>
+<g >
+<title>lookup (1 samples, 0.30%)</title><rect x="830.2" y="565" width="3.6" height="15.0" fill="rgb(211,28,6)" rx="2" ry="2" />
+<text  x="833.24" y="575.5" ></text>
+</g>
+<g >
+<title>(anonymous) (7 samples, 2.13%)</title><rect x="1146.8" y="597" width="25.2" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="1149.83" y="607.5" >(..</text>
+</g>
+<g >
+<title>runConcurrentRequests (4 samples, 1.22%)</title><rect x="923.8" y="597" width="14.4" height="15.0" fill="rgb(214,42,10)" rx="2" ry="2" />
+<text  x="926.78" y="607.5" ></text>
+</g>
+<g >
+<title>internal:promisify (1 samples, 0.30%)</title><rect x="704.3" y="581" width="3.6" height="15.0" fill="rgb(205,3,0)" rx="2" ry="2" />
+<text  x="707.33" y="591.5" ></text>
+</g>
+<g >
+<title>close (1 samples, 0.30%)</title><rect x="913.0" y="597" width="3.6" height="15.0" fill="rgb(213,41,9)" rx="2" ry="2" />
+<text  x="915.99" y="607.5" ></text>
+</g>
+<g >
+<title>acquire (54 samples, 16.46%)</title><rect x="941.8" y="581" width="194.2" height="15.0" fill="rgb(244,181,43)" rx="2" ry="2" />
+<text  x="944.77" y="591.5" >acquire</text>
+</g>
+<g >
+<title>loadAndEvaluateModule (2 samples, 0.61%)</title><rect x="758.3" y="645" width="7.2" height="15.0" fill="rgb(216,54,13)" rx="2" ry="2" />
+<text  x="761.29" y="655.5" ></text>
+</g>
+<g >
+<title>deprecate (1 samples, 0.30%)</title><rect x="628.8" y="533" width="3.6" height="15.0" fill="rgb(234,137,32)" rx="2" ry="2" />
+<text  x="631.78" y="543.5" ></text>
+</g>
+<g >
+<title>Redis (3 samples, 0.91%)</title><rect x="848.2" y="485" width="10.8" height="15.0" fill="rgb(214,42,10)" rx="2" ry="2" />
+<text  x="851.23" y="495.5" ></text>
+</g>
+<g >
+<title>returnReply (5 samples, 1.52%)</title><rect x="1150.4" y="533" width="18.0" height="15.0" fill="rgb(237,149,35)" rx="2" ry="2" />
+<text  x="1153.43" y="543.5" ></text>
+</g>
+<g >
+<title>urlParse (1 samples, 0.30%)</title><rect x="855.4" y="437" width="3.6" height="15.0" fill="rgb(248,200,47)" rx="2" ry="2" />
+<text  x="858.43" y="447.5" ></text>
+</g>
+<g >
+<title>(anonymous) (27 samples, 8.23%)</title><rect x="517.3" y="293" width="97.1" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="520.26" y="303.5" >(anonymous)</text>
+</g>
+<g >
+<title>Writable (1 samples, 0.30%)</title><rect x="452.5" y="117" width="3.6" height="15.0" fill="rgb(227,104,24)" rx="2" ry="2" />
+<text  x="455.50" y="127.5" ></text>
+</g>
+<g >
+<title>once (1 samples, 0.30%)</title><rect x="805.1" y="565" width="3.6" height="15.0" fill="rgb(243,179,42)" rx="2" ry="2" />
+<text  x="808.06" y="575.5" ></text>
+</g>
+<g >
+<title>filter (1 samples, 0.30%)</title><rect x="603.6" y="149" width="3.6" height="15.0" fill="rgb(240,163,39)" rx="2" ry="2" />
+<text  x="606.60" y="159.5" ></text>
+</g>
+<g >
+<title>anonymous (4 samples, 1.22%)</title><rect x="711.5" y="597" width="14.4" height="15.0" fill="rgb(247,194,46)" rx="2" ry="2" />
+<text  x="714.52" y="607.5" ></text>
+</g>
+<g >
+<title>assign (5 samples, 1.52%)</title><rect x="445.3" y="293" width="18.0" height="15.0" fill="rgb(246,192,46)" rx="2" ry="2" />
+<text  x="448.30" y="303.5" ></text>
+</g>
+<g >
+<title>get ReadStream (16 samples, 4.88%)</title><rect x="636.0" y="613" width="57.5" height="15.0" fill="rgb(229,113,27)" rx="2" ry="2" />
+<text  x="638.98" y="623.5" >get Re..</text>
+</g>
+<g >
+<title>internal:streams/end-of-stream (1 samples, 0.30%)</title><rect x="686.3" y="453" width="3.6" height="15.0" fill="rgb(240,162,38)" rx="2" ry="2" />
+<text  x="689.34" y="463.5" ></text>
+</g>
+<g >
+<title>anonymous (15 samples, 4.57%)</title><rect x="639.6" y="565" width="53.9" height="15.0" fill="rgb(247,194,46)" rx="2" ry="2" />
+<text  x="642.57" y="575.5" >anony..</text>
+</g>
+<g >
+<title>readableAddChunkPushByteMode (1 samples, 0.30%)</title><rect x="754.7" y="629" width="3.6" height="15.0" fill="rgb(208,14,3)" rx="2" ry="2" />
+<text  x="757.70" y="639.5" ></text>
+</g>
+<g >
+<title>(anonymous) (1 samples, 0.30%)</title><rect x="970.5" y="453" width="3.6" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="973.55" y="463.5" ></text>
+</g>
+<g >
+<title>toArg (1 samples, 0.30%)</title><rect x="970.5" y="421" width="3.6" height="15.0" fill="rgb(225,94,22)" rx="2" ry="2" />
+<text  x="973.55" y="431.5" ></text>
+</g>
+<g >
+<title>emitReadable_ (7 samples, 2.13%)</title><rect x="1146.8" y="629" width="25.2" height="15.0" fill="rgb(251,212,50)" rx="2" ry="2" />
+<text  x="1149.83" y="639.5" >e..</text>
+</g>
+<g >
+<title>anonymous (78 samples, 23.78%)</title><rect x="337.4" y="373" width="280.6" height="15.0" fill="rgb(247,194,46)" rx="2" ry="2" />
+<text  x="340.38" y="383.5" >anonymous</text>
+</g>
+<g >
+<title>anonymous (8 samples, 2.44%)</title><rect x="582.0" y="181" width="28.8" height="15.0" fill="rgb(247,194,46)" rx="2" ry="2" />
+<text  x="585.01" y="191.5" >an..</text>
+</g>
+<g >
+<title>sendCommand (1 samples, 0.30%)</title><rect x="866.2" y="437" width="3.6" height="15.0" fill="rgb(220,70,16)" rx="2" ry="2" />
+<text  x="869.22" y="447.5" ></text>
+</g>
+<g >
+<title>runBenchmark (18 samples, 5.49%)</title><rect x="873.4" y="613" width="64.8" height="15.0" fill="rgb(251,214,51)" rx="2" ry="2" />
+<text  x="876.41" y="623.5" >runBenc..</text>
+</g>
+<g >
+<title>node:fs (5 samples, 1.52%)</title><rect x="693.5" y="613" width="18.0" height="15.0" fill="rgb(211,27,6)" rx="2" ry="2" />
+<text  x="696.54" y="623.5" ></text>
+</g>
+<g >
+<title>acquire (10 samples, 3.05%)</title><rect x="877.0" y="565" width="36.0" height="15.0" fill="rgb(244,181,43)" rx="2" ry="2" />
+<text  x="880.01" y="575.5" >acq..</text>
+</g>
+<g >
+<title>bound require (80 samples, 24.39%)</title><rect x="330.2" y="405" width="287.8" height="15.0" fill="rgb(252,218,52)" rx="2" ry="2" />
+<text  x="333.18" y="415.5" >bound require</text>
+</g>
+<g >
+<title>anonymous (13 samples, 3.96%)</title><rect x="643.2" y="501" width="46.7" height="15.0" fill="rgb(247,194,46)" rx="2" ry="2" />
+<text  x="646.17" y="511.5" >anon..</text>
+</g>
+<g >
+<title>anonymous (1 samples, 0.30%)</title><rect x="704.3" y="565" width="3.6" height="15.0" fill="rgb(247,194,46)" rx="2" ry="2" />
+<text  x="707.33" y="575.5" ></text>
+</g>
+<g >
+<title>(anonymous) (100 samples, 30.49%)</title><rect x="787.1" y="629" width="359.7" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="790.07" y="639.5" >(anonymous)</text>
+</g>
+<g >
+<title>bound require (1 samples, 0.30%)</title><rect x="607.2" y="133" width="3.6" height="15.0" fill="rgb(252,218,52)" rx="2" ry="2" />
+<text  x="610.20" y="143.5" ></text>
+</g>
+<g >
+<title>loadModule (2 samples, 0.61%)</title><rect x="758.3" y="597" width="7.2" height="15.0" fill="rgb(209,22,5)" rx="2" ry="2" />
+<text  x="761.29" y="607.5" ></text>
+</g>
+<g >
+<title>worker (2 samples, 0.61%)</title><rect x="931.0" y="565" width="7.2" height="15.0" fill="rgb(211,28,6)" rx="2" ry="2" />
+<text  x="933.98" y="575.5" ></text>
+</g>
+<g >
+<title>Command (6 samples, 1.83%)</title><rect x="952.6" y="501" width="21.5" height="15.0" fill="rgb(222,79,18)" rx="2" ry="2" />
+<text  x="955.56" y="511.5" >C..</text>
+</g>
+<g >
+<title>acquire (1 samples, 0.30%)</title><rect x="934.6" y="517" width="3.6" height="15.0" fill="rgb(244,181,43)" rx="2" ry="2" />
+<text  x="937.57" y="527.5" ></text>
+</g>
+<g >
+<title>anonymous (39 samples, 11.89%)</title><rect x="474.1" y="309" width="140.3" height="15.0" fill="rgb(247,194,46)" rx="2" ry="2" />
+<text  x="477.09" y="319.5" >anonymous</text>
+</g>
+<g >
+<title>afterConnect (5 samples, 1.52%)</title><rect x="765.5" y="597" width="18.0" height="15.0" fill="rgb(227,103,24)" rx="2" ry="2" />
+<text  x="768.49" y="607.5" ></text>
+</g>
+<g >
+<title>processTicksAndRejections (113 samples, 34.45%)</title><rect x="783.5" y="645" width="406.5" height="15.0" fill="rgb(230,118,28)" rx="2" ry="2" />
+<text  x="786.48" y="655.5" >processTicksAndRejections</text>
+</g>
+<g >
+<title>requestSatisfy (1 samples, 0.30%)</title><rect x="761.9" y="581" width="3.6" height="15.0" fill="rgb(220,70,16)" rx="2" ry="2" />
+<text  x="764.89" y="591.5" ></text>
+</g>
+<g >
+<title>require (145 samples, 44.21%)</title><rect x="107.1" y="517" width="521.7" height="15.0" fill="rgb(221,76,18)" rx="2" ry="2" />
+<text  x="110.13" y="527.5" >require</text>
+</g>
+<g >
+<title>apply (1 samples, 0.30%)</title><rect x="851.8" y="389" width="3.6" height="15.0" fill="rgb(210,25,6)" rx="2" ry="2" />
+<text  x="854.83" y="399.5" ></text>
+</g>
+<g >
+<title>anonymous (160 samples, 48.78%)</title><rect x="60.4" y="565" width="575.6" height="15.0" fill="rgb(247,194,46)" rx="2" ry="2" />
+<text  x="63.37" y="575.5" >anonymous</text>
+</g>
+<g >
+<title>bound onwrite (1 samples, 0.30%)</title><rect x="779.9" y="469" width="3.6" height="15.0" fill="rgb(231,121,29)" rx="2" ry="2" />
+<text  x="782.88" y="479.5" ></text>
+</g>
+<g >
+<title>(anonymous) (1 samples, 0.30%)</title><rect x="13.6" y="597" width="3.6" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="16.60" y="607.5" ></text>
+</g>
+<g >
+<title>parseModule (197 samples, 60.06%)</title><rect x="17.2" y="629" width="708.7" height="15.0" fill="rgb(215,47,11)" rx="2" ry="2" />
+<text  x="20.20" y="639.5" >parseModule</text>
+</g>
+<g >
+<title>runBenchmark (7 samples, 2.13%)</title><rect x="844.6" y="517" width="25.2" height="15.0" fill="rgb(251,214,51)" rx="2" ry="2" />
+<text  x="847.63" y="527.5" >r..</text>
+</g>
+<g >
+<title>endWritableNT (1 samples, 0.30%)</title><rect x="1175.6" y="629" width="3.6" height="15.0" fill="rgb(222,78,18)" rx="2" ry="2" />
+<text  x="1178.61" y="639.5" ></text>
+</g>
+<g >
+<title>bound onceWrapper (1 samples, 0.30%)</title><rect x="13.6" y="613" width="3.6" height="15.0" fill="rgb(213,40,9)" rx="2" ry="2" />
+<text  x="16.60" y="623.5" ></text>
+</g>
+<g >
+<title>test (1 samples, 0.30%)</title><rect x="826.6" y="565" width="3.6" height="15.0" fill="rgb(219,66,15)" rx="2" ry="2" />
+<text  x="829.65" y="575.5" ></text>
+</g>
+<g >
+<title>(anonymous) (204 samples, 62.20%)</title><rect x="10.0" y="645" width="733.9" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="13.00" y="655.5" >(anonymous)</text>
+</g>
+<g >
+<title>end (1 samples, 0.30%)</title><rect x="754.7" y="645" width="3.6" height="15.0" fill="rgb(254,227,54)" rx="2" ry="2" />
+<text  x="757.70" y="655.5" ></text>
+</g>
+<g >
+<title>endBuffered (1 samples, 0.30%)</title><rect x="1172.0" y="613" width="3.6" height="15.0" fill="rgb(217,56,13)" rx="2" ry="2" />
+<text  x="1175.01" y="623.5" ></text>
+</g>
+<g >
+<title>onEofChunk (1 samples, 0.30%)</title><rect x="754.7" y="613" width="3.6" height="15.0" fill="rgb(251,216,51)" rx="2" ry="2" />
+<text  x="757.70" y="623.5" ></text>
+</g>
+<g >
+<title>internal:shared (3 samples, 0.91%)</title><rect x="715.1" y="549" width="10.8" height="15.0" fill="rgb(250,210,50)" rx="2" ry="2" />
+<text  x="718.12" y="559.5" ></text>
+</g>
+<g >
+<title>fetch (2 samples, 0.61%)</title><rect x="733.1" y="549" width="7.2" height="15.0" fill="rgb(241,167,40)" rx="2" ry="2" />
+<text  x="736.11" y="559.5" ></text>
+</g>
+<g >
+<title>require (160 samples, 48.78%)</title><rect x="60.4" y="581" width="575.6" height="15.0" fill="rgb(221,76,18)" rx="2" ry="2" />
+<text  x="63.37" y="591.5" >require</text>
+</g>
+<g >
+<title>acquire (2 samples, 0.61%)</title><rect x="862.6" y="485" width="7.2" height="15.0" fill="rgb(244,181,43)" rx="2" ry="2" />
+<text  x="865.62" y="495.5" ></text>
+</g>
+<g >
+<title>(anonymous) (1 samples, 0.30%)</title><rect x="1179.2" y="613" width="3.6" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="1182.21" y="623.5" ></text>
+</g>
+<g >
+<title>unshift (1 samples, 0.30%)</title><rect x="977.7" y="517" width="3.6" height="15.0" fill="rgb(245,188,44)" rx="2" ry="2" />
+<text  x="980.74" y="527.5" ></text>
+</g>
+<g >
+<title>anonymous (2 samples, 0.61%)</title><rect x="330.2" y="389" width="7.2" height="15.0" fill="rgb(247,194,46)" rx="2" ry="2" />
+<text  x="333.18" y="399.5" ></text>
+</g>
+<g >
+<title>file (1 samples, 0.30%)</title><rect x="456.1" y="117" width="3.6" height="15.0" fill="rgb(226,97,23)" rx="2" ry="2" />
+<text  x="459.10" y="127.5" ></text>
+</g>
+<g >
+<title>push (1 samples, 0.30%)</title><rect x="927.4" y="565" width="3.6" height="15.0" fill="rgb(219,66,15)" rx="2" ry="2" />
+<text  x="930.38" y="575.5" ></text>
+</g>
+<g >
+<title>internal:streams/pipeline (9 samples, 2.74%)</title><rect x="654.0" y="421" width="32.3" height="15.0" fill="rgb(251,215,51)" rx="2" ry="2" />
+<text  x="656.96" y="431.5" >in..</text>
+</g>
+<g >
+<title>internal:streams/readable (2 samples, 0.61%)</title><rect x="679.1" y="357" width="7.2" height="15.0" fill="rgb(247,194,46)" rx="2" ry="2" />
+<text  x="682.15" y="367.5" ></text>
+</g>
+<g >
+<title>(anonymous) (2 samples, 0.61%)</title><rect x="776.3" y="517" width="7.2" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="779.28" y="527.5" ></text>
+</g>
+<g >
+<title>emit (1 samples, 0.30%)</title><rect x="1186.4" y="613" width="3.6" height="15.0" fill="rgb(229,111,26)" rx="2" ry="2" />
+<text  x="1189.40" y="623.5" ></text>
+</g>
+<g >
+<title>loadAndEvaluateModule (10 samples, 3.05%)</title><rect x="837.4" y="613" width="36.0" height="15.0" fill="rgb(216,54,13)" rx="2" ry="2" />
+<text  x="840.44" y="623.5" >loa..</text>
+</g>
+<g >
+<title>parseBulkString (1 samples, 0.30%)</title><rect x="1146.8" y="517" width="3.6" height="15.0" fill="rgb(234,135,32)" rx="2" ry="2" />
+<text  x="1149.83" y="527.5" ></text>
+</g>
+<g >
+<title>anonymous (25 samples, 7.62%)</title><rect x="520.9" y="245" width="89.9" height="15.0" fill="rgb(247,194,46)" rx="2" ry="2" />
+<text  x="523.85" y="255.5" >anonymous</text>
+</g>
+<g >
+<title>moduleEvaluation (8 samples, 2.44%)</title><rect x="844.6" y="581" width="28.8" height="15.0" fill="rgb(220,71,17)" rx="2" ry="2" />
+<text  x="847.63" y="591.5" >mo..</text>
+</g>
+<g >
+<title>checkFlag (1 samples, 0.30%)</title><rect x="1161.2" y="501" width="3.6" height="15.0" fill="rgb(227,101,24)" rx="2" ry="2" />
+<text  x="1164.22" y="511.5" ></text>
+</g>
+<g >
+<title>handleMonitorReply (1 samples, 0.30%)</title><rect x="1164.8" y="501" width="3.6" height="15.0" fill="rgb(217,56,13)" rx="2" ry="2" />
+<text  x="1167.82" y="511.5" ></text>
+</g>
+<g >
+<title>(anonymous) (6 samples, 1.83%)</title><rect x="1146.8" y="565" width="21.6" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="1149.83" y="575.5" >(..</text>
+</g>
+<g >
+<title>(module) (1 samples, 0.30%)</title><rect x="869.8" y="517" width="3.6" height="15.0" fill="rgb(217,56,13)" rx="2" ry="2" />
+<text  x="872.82" y="527.5" ></text>
+</g>
+<g >
+<title>acquire (2 samples, 0.61%)</title><rect x="862.6" y="453" width="7.2" height="15.0" fill="rgb(244,181,43)" rx="2" ry="2" />
+<text  x="865.62" y="463.5" ></text>
+</g>
+<g >
+<title>anonymous (16 samples, 4.88%)</title><rect x="636.0" y="597" width="57.5" height="15.0" fill="rgb(247,194,46)" rx="2" ry="2" />
+<text  x="638.98" y="607.5" >anonym..</text>
+</g>
+<g >
+<title>acquire (10 samples, 3.05%)</title><rect x="877.0" y="581" width="36.0" height="15.0" fill="rgb(244,181,43)" rx="2" ry="2" />
+<text  x="880.01" y="591.5" >acq..</text>
+</g>
+<g >
+<title>node:fs/promises (1 samples, 0.30%)</title><rect x="707.9" y="581" width="3.6" height="15.0" fill="rgb(209,21,5)" rx="2" ry="2" />
+<text  x="710.93" y="591.5" ></text>
+</g>
+<g >
+<title>CustomScriptCommand (6 samples, 1.83%)</title><rect x="952.6" y="517" width="21.5" height="15.0" fill="rgb(206,8,2)" rx="2" ry="2" />
+<text  x="955.56" y="527.5" >C..</text>
+</g>
+<g >
+<title>fromList (1 samples, 0.30%)</title><rect x="1168.4" y="581" width="3.6" height="15.0" fill="rgb(235,140,33)" rx="2" ry="2" />
+<text  x="1171.41" y="591.5" ></text>
+</g>
+<g >
+<title>internal:fs/streams (15 samples, 4.57%)</title><rect x="639.6" y="581" width="53.9" height="15.0" fill="rgb(216,54,12)" rx="2" ry="2" />
+<text  x="642.57" y="591.5" >inter..</text>
+</g>
+<g >
+<title>internal:validators (3 samples, 0.91%)</title><rect x="715.1" y="581" width="10.8" height="15.0" fill="rgb(243,178,42)" rx="2" ry="2" />
+<text  x="718.12" y="591.5" ></text>
+</g>
+<g >
+<title>moduleDeclarationInstantiation (1 samples, 0.30%)</title><rect x="841.0" y="517" width="3.6" height="15.0" fill="rgb(245,186,44)" rx="2" ry="2" />
+<text  x="844.04" y="527.5" ></text>
+</g>
+<g >
+<title>internal:streams/duplex (7 samples, 2.13%)</title><rect x="661.2" y="389" width="25.1" height="15.0" fill="rgb(217,59,14)" rx="2" ry="2" />
+<text  x="664.16" y="399.5" >i..</text>
+</g>
+<g >
+<title>node:util (11 samples, 3.35%)</title><rect x="193.5" y="437" width="39.5" height="15.0" fill="rgb(231,122,29)" rx="2" ry="2" />
+<text  x="196.48" y="447.5" >nod..</text>
+</g>
+<g >
+<title>anonymous (11 samples, 3.35%)</title><rect x="193.5" y="421" width="39.5" height="15.0" fill="rgb(247,194,46)" rx="2" ry="2" />
+<text  x="196.48" y="431.5" >ano..</text>
+</g>
+<g >
+<title>(anonymous) (1 samples, 0.30%)</title><rect x="761.9" y="533" width="3.6" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="764.89" y="543.5" ></text>
+</g>
+<g >
+<title>anonymous (1 samples, 0.30%)</title><rect x="607.2" y="101" width="3.6" height="15.0" fill="rgb(247,194,46)" rx="2" ry="2" />
+<text  x="610.20" y="111.5" ></text>
+</g>
+<g >
+<title>get (2 samples, 0.61%)</title><rect x="1114.5" y="517" width="7.1" height="15.0" fill="rgb(246,190,45)" rx="2" ry="2" />
+<text  x="1117.45" y="527.5" ></text>
+</g>
+<g >
+<title>setup (1 samples, 0.30%)</title><rect x="607.2" y="149" width="3.6" height="15.0" fill="rgb(239,158,38)" rx="2" ry="2" />
+<text  x="610.20" y="159.5" ></text>
+</g>
+<g >
+<title>anonymous (145 samples, 44.21%)</title><rect x="107.1" y="501" width="521.7" height="15.0" fill="rgb(247,194,46)" rx="2" ry="2" />
+<text  x="110.13" y="511.5" >anonymous</text>
+</g>
+<g >
+<title>loadAssertionError (5 samples, 1.52%)</title><rect x="445.3" y="261" width="18.0" height="15.0" fill="rgb(254,227,54)" rx="2" ry="2" />
+<text  x="448.30" y="271.5" ></text>
+</g>
+<g >
+<title>(anonymous) (3 samples, 0.91%)</title><rect x="1150.4" y="501" width="10.8" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="1153.43" y="511.5" ></text>
+</g>
+<g >
+<title>defineCommand (1 samples, 0.30%)</title><rect x="859.0" y="485" width="3.6" height="15.0" fill="rgb(223,85,20)" rx="2" ry="2" />
+<text  x="862.02" y="495.5" ></text>
+</g>
+<g >
+<title>requestFetch (3 samples, 0.91%)</title><rect x="729.5" y="565" width="10.8" height="15.0" fill="rgb(228,109,26)" rx="2" ry="2" />
+<text  x="732.51" y="575.5" ></text>
+</g>
+<g >
+<title>WriteStream (2 samples, 0.61%)</title><rect x="452.5" y="133" width="7.2" height="15.0" fill="rgb(229,114,27)" rx="2" ry="2" />
+<text  x="455.50" y="143.5" ></text>
+</g>
+<g >
+<title>(anonymous) (3 samples, 0.91%)</title><rect x="448.9" y="165" width="10.8" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="451.90" y="175.5" ></text>
+</g>
+<g >
+<title>require (8 samples, 2.44%)</title><rect x="582.0" y="197" width="28.8" height="15.0" fill="rgb(221,76,18)" rx="2" ry="2" />
+<text  x="585.01" y="207.5" >re..</text>
+</g>
+<g >
+<title>link (1 samples, 0.30%)</title><rect x="841.0" y="581" width="3.6" height="15.0" fill="rgb(235,141,33)" rx="2" ry="2" />
+<text  x="844.04" y="591.5" ></text>
+</g>
+<g >
+<title>toWritable (3 samples, 0.91%)</title><rect x="1121.6" y="517" width="10.8" height="15.0" fill="rgb(211,28,6)" rx="2" ry="2" />
+<text  x="1124.65" y="527.5" ></text>
+</g>
+<g >
+<title>node:net (1 samples, 0.30%)</title><rect x="470.5" y="309" width="3.6" height="15.0" fill="rgb(250,208,49)" rx="2" ry="2" />
+<text  x="473.49" y="319.5" ></text>
+</g>
+<g >
+<title>node:os (1 samples, 0.30%)</title><rect x="596.4" y="53" width="3.6" height="15.0" fill="rgb(252,220,52)" rx="2" ry="2" />
+<text  x="599.40" y="63.5" ></text>
+</g>
+<g >
+<title>requestSatisfyUtil (1 samples, 0.30%)</title><rect x="761.9" y="565" width="3.6" height="15.0" fill="rgb(245,188,45)" rx="2" ry="2" />
+<text  x="764.89" y="575.5" ></text>
+</g>
+<g >
+<title>ensureRegistered (1 samples, 0.30%)</title><rect x="758.3" y="581" width="3.6" height="15.0" fill="rgb(207,11,2)" rx="2" ry="2" />
+<text  x="761.29" y="591.5" ></text>
+</g>
+<g >
+<title>anonymous (4 samples, 1.22%)</title><rect x="448.9" y="213" width="14.4" height="15.0" fill="rgb(247,194,46)" rx="2" ry="2" />
+<text  x="451.90" y="223.5" ></text>
+</g>
+<g >
+<title>anonymous (5 samples, 1.52%)</title><rect x="445.3" y="245" width="18.0" height="15.0" fill="rgb(247,194,46)" rx="2" ry="2" />
+<text  x="448.30" y="255.5" ></text>
+</g>
+<g >
+<title>(anonymous) (2 samples, 0.61%)</title><rect x="596.4" y="101" width="7.2" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="599.40" y="111.5" ></text>
+</g>
+<g >
+<title>onConstruct (1 samples, 0.30%)</title><rect x="1186.4" y="629" width="3.6" height="15.0" fill="rgb(252,216,51)" rx="2" ry="2" />
+<text  x="1189.40" y="639.5" ></text>
+</g>
+<g >
+<title>(anonymous) (34 samples, 10.37%)</title><rect x="992.1" y="517" width="122.4" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="995.13" y="527.5" >(anonymous)</text>
+</g>
+<g >
+<title>require (25 samples, 7.62%)</title><rect x="520.9" y="261" width="89.9" height="15.0" fill="rgb(221,76,18)" rx="2" ry="2" />
+<text  x="523.85" y="271.5" >require</text>
+</g>
+<g >
+<title>finish (1 samples, 0.30%)</title><rect x="1179.2" y="629" width="3.6" height="15.0" fill="rgb(222,81,19)" rx="2" ry="2" />
+<text  x="1182.21" y="639.5" ></text>
+</g>
+<g >
+<title>anonymous (5 samples, 1.52%)</title><rect x="693.5" y="597" width="18.0" height="15.0" fill="rgb(247,194,46)" rx="2" ry="2" />
+<text  x="696.54" y="607.5" ></text>
+</g>
+<g >
+<title>loadModule (2 samples, 0.61%)</title><rect x="758.3" y="613" width="7.2" height="15.0" fill="rgb(209,22,5)" rx="2" ry="2" />
+<text  x="761.29" y="623.5" ></text>
+</g>
+<g >
+<title>anonymous (3 samples, 0.91%)</title><rect x="715.1" y="565" width="10.8" height="15.0" fill="rgb(247,194,46)" rx="2" ry="2" />
+<text  x="718.12" y="575.5" ></text>
+</g>
+<g >
+<title>listenerCount (1 samples, 0.30%)</title><rect x="452.5" y="85" width="3.6" height="15.0" fill="rgb(227,105,25)" rx="2" ry="2" />
+<text  x="455.50" y="95.5" ></text>
+</g>
+<g >
+<title>acquire (53 samples, 16.16%)</title><rect x="945.4" y="565" width="190.6" height="15.0" fill="rgb(244,181,43)" rx="2" ry="2" />
+<text  x="948.37" y="575.5" >acquire</text>
+</g>
+<g >
+<title>(anonymous) (6 samples, 1.83%)</title><rect x="589.2" y="165" width="21.6" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="592.21" y="175.5" >(..</text>
+</g>
+<g >
+<title>bound require (8 samples, 2.44%)</title><rect x="582.0" y="213" width="28.8" height="15.0" fill="rgb(252,218,52)" rx="2" ry="2" />
+<text  x="585.01" y="223.5" >bo..</text>
+</g>
+<g >
+<title>(anonymous) (160 samples, 48.78%)</title><rect x="60.4" y="613" width="575.6" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="63.37" y="623.5" >(anonymous)</text>
+</g>
+<g >
+<title>link (1 samples, 0.30%)</title><rect x="841.0" y="549" width="3.6" height="15.0" fill="rgb(235,141,33)" rx="2" ry="2" />
+<text  x="844.04" y="559.5" ></text>
+</g>
+<g >
+<title>(anonymous) (83 samples, 25.30%)</title><rect x="326.6" y="421" width="298.6" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="329.59" y="431.5" >(anonymous)</text>
+</g>
+<g >
+<title>anonymous (1 samples, 0.30%)</title><rect x="682.7" y="341" width="3.6" height="15.0" fill="rgb(247,194,46)" rx="2" ry="2" />
+<text  x="685.74" y="351.5" ></text>
+</g>
+<g >
+<title>DataHandler (1 samples, 0.30%)</title><rect x="772.7" y="533" width="3.6" height="15.0" fill="rgb(236,146,35)" rx="2" ry="2" />
+<text  x="775.68" y="543.5" ></text>
+</g>
+<g >
+<title>copyProps (1 samples, 0.30%)</title><rect x="722.3" y="485" width="3.6" height="15.0" fill="rgb(215,46,11)" rx="2" ry="2" />
+<text  x="725.32" y="495.5" ></text>
+</g>
+<g >
+<title>(anonymous) (1 samples, 0.30%)</title><rect x="801.5" y="549" width="3.6" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="804.46" y="559.5" ></text>
+</g>
+<g >
+<title>(anonymous) (1 samples, 0.30%)</title><rect x="851.8" y="341" width="3.6" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="854.83" y="351.5" ></text>
+</g>
+<g >
+<title>stringifyArguments (1 samples, 0.30%)</title><rect x="970.5" y="437" width="3.6" height="15.0" fill="rgb(224,91,21)" rx="2" ry="2" />
+<text  x="973.55" y="447.5" ></text>
+</g>
+<g >
+<title>bound require (145 samples, 44.21%)</title><rect x="107.1" y="533" width="521.7" height="15.0" fill="rgb(252,218,52)" rx="2" ry="2" />
+<text  x="110.13" y="543.5" >bound require</text>
+</g>
+<g >
+<title>emitLookup (1 samples, 0.30%)</title><rect x="790.7" y="597" width="3.6" height="15.0" fill="rgb(233,132,31)" rx="2" ry="2" />
+<text  x="793.67" y="607.5" ></text>
+</g>
+<g >
+<title>(anonymous) (1 samples, 0.30%)</title><rect x="614.4" y="325" width="3.6" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="617.39" y="335.5" ></text>
+</g>
+<g >
+<title>convertBufferToString (3 samples, 0.91%)</title><rect x="1150.4" y="469" width="10.8" height="15.0" fill="rgb(221,74,17)" rx="2" ry="2" />
+<text  x="1153.43" y="479.5" ></text>
+</g>
+<g >
+<title>isIterateeCall (1 samples, 0.30%)</title><rect x="851.8" y="325" width="3.6" height="15.0" fill="rgb(246,193,46)" rx="2" ry="2" />
+<text  x="854.83" y="335.5" ></text>
+</g>
+<g >
+<title>all (328 samples, 100%)</title><rect x="10.0" y="661" width="1180.0" height="15.0" fill="rgb(213,39,9)" rx="2" ry="2" />
+<text  x="13.00" y="671.5" ></text>
+</g>
+<g >
+<title>defineProperties (1 samples, 0.30%)</title><rect x="621.6" y="389" width="3.6" height="15.0" fill="rgb(209,19,4)" rx="2" ry="2" />
+<text  x="624.59" y="399.5" ></text>
+</g>
+<g >
+<title>_write (1 samples, 0.30%)</title><rect x="880.6" y="501" width="3.6" height="15.0" fill="rgb(214,44,10)" rx="2" ry="2" />
+<text  x="883.61" y="511.5" ></text>
+</g>
+<g >
+<title>emit (4 samples, 1.22%)</title><rect x="769.1" y="581" width="14.4" height="15.0" fill="rgb(229,111,26)" rx="2" ry="2" />
+<text  x="772.09" y="591.5" ></text>
+</g>
+<g >
+<title>moduleEvaluation (1 samples, 0.30%)</title><rect x="869.8" y="549" width="3.6" height="15.0" fill="rgb(220,71,17)" rx="2" ry="2" />
+<text  x="872.82" y="559.5" ></text>
+</g>
+<g >
+<title>runBenchmark (7 samples, 2.13%)</title><rect x="844.6" y="533" width="25.2" height="15.0" fill="rgb(251,214,51)" rx="2" ry="2" />
+<text  x="847.63" y="543.5" >r..</text>
+</g>
+<g >
+<title>data (3 samples, 0.91%)</title><rect x="743.9" y="645" width="10.8" height="15.0" fill="rgb(214,45,10)" rx="2" ry="2" />
+<text  x="746.90" y="655.5" ></text>
+</g>
+<g >
+<title>byteLength (1 samples, 0.30%)</title><rect x="905.8" y="501" width="3.6" height="15.0" fill="rgb(206,6,1)" rx="2" ry="2" />
+<text  x="908.79" y="511.5" ></text>
+</g>
+<g >
+<title>(anonymous) (1 samples, 0.30%)</title><rect x="934.6" y="469" width="3.6" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="937.57" y="479.5" ></text>
+</g>
+<g >
+<title>requestInstantiate (1 samples, 0.30%)</title><rect x="761.9" y="549" width="3.6" height="15.0" fill="rgb(226,99,23)" rx="2" ry="2" />
+<text  x="764.89" y="559.5" ></text>
+</g>
+<g >
+<title>(anonymous) (4 samples, 1.22%)</title><rect x="769.1" y="549" width="14.4" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="772.09" y="559.5" ></text>
+</g>
+<g >
+<title>internal:util/colors (4 samples, 1.22%)</title><rect x="448.9" y="197" width="14.4" height="15.0" fill="rgb(241,168,40)" rx="2" ry="2" />
+<text  x="451.90" y="207.5" ></text>
+</g>
+<g >
+<title>require (1 samples, 0.30%)</title><rect x="600.0" y="69" width="3.6" height="15.0" fill="rgb(221,76,18)" rx="2" ry="2" />
+<text  x="603.00" y="79.5" ></text>
+</g>
+<g >
+<title>emit (1 samples, 0.30%)</title><rect x="13.6" y="629" width="3.6" height="15.0" fill="rgb(229,111,26)" rx="2" ry="2" />
+<text  x="16.60" y="639.5" ></text>
+</g>
+<g >
+<title>_write (5 samples, 1.52%)</title><rect x="884.2" y="485" width="18.0" height="15.0" fill="rgb(214,44,10)" rx="2" ry="2" />
+<text  x="887.21" y="495.5" ></text>
+</g>
+<g >
+<title>internal:util/inspect (4 samples, 1.22%)</title><rect x="218.7" y="405" width="14.3" height="15.0" fill="rgb(245,186,44)" rx="2" ry="2" />
+<text  x="221.66" y="415.5" ></text>
+</g>
+<g >
+<title>lookupAndConnectMultiple (1 samples, 0.30%)</title><rect x="830.2" y="581" width="3.6" height="15.0" fill="rgb(220,70,16)" rx="2" ry="2" />
+<text  x="833.24" y="591.5" ></text>
+</g>
+<g >
+<title>require (4 samples, 1.22%)</title><rect x="589.2" y="133" width="14.4" height="15.0" fill="rgb(221,76,18)" rx="2" ry="2" />
+<text  x="592.21" y="143.5" ></text>
+</g>
+<g >
+<title>refresh (4 samples, 1.22%)</title><rect x="448.9" y="181" width="14.4" height="15.0" fill="rgb(212,32,7)" rx="2" ry="2" />
+<text  x="451.90" y="191.5" ></text>
+</g>
+<g >
+<title>forEach (1 samples, 0.30%)</title><rect x="610.8" y="277" width="3.6" height="15.0" fill="rgb(217,57,13)" rx="2" ry="2" />
+<text  x="613.79" y="287.5" ></text>
+</g>
+<g >
+<title>(anonymous) (6 samples, 1.83%)</title><rect x="880.6" y="517" width="21.6" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="883.61" y="527.5" >(..</text>
+</g>
+<g >
+<title>anonymous (1 samples, 0.30%)</title><rect x="600.0" y="53" width="3.6" height="15.0" fill="rgb(247,194,46)" rx="2" ry="2" />
+<text  x="603.00" y="63.5" ></text>
+</g>
+<g >
+<title>construct (1 samples, 0.30%)</title><rect x="452.5" y="101" width="3.6" height="15.0" fill="rgb(223,82,19)" rx="2" ry="2" />
+<text  x="455.50" y="111.5" ></text>
+</g>
+<g >
+<title>Script (1 samples, 0.30%)</title><rect x="859.0" y="469" width="3.6" height="15.0" fill="rgb(250,208,49)" rx="2" ry="2" />
+<text  x="862.02" y="479.5" ></text>
+</g>
+<g >
+<title>destroy (1 samples, 0.30%)</title><rect x="1179.2" y="597" width="3.6" height="15.0" fill="rgb(237,150,36)" rx="2" ry="2" />
+<text  x="1182.21" y="607.5" ></text>
+</g>
+<g >
+<title>(anonymous) (1 samples, 0.30%)</title><rect x="625.2" y="453" width="3.6" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="628.18" y="463.5" ></text>
+</g>
+<g >
+<title>require (109 samples, 33.23%)</title><rect x="233.0" y="453" width="392.2" height="15.0" fill="rgb(221,76,18)" rx="2" ry="2" />
+<text  x="236.05" y="463.5" >require</text>
+</g>
+<g >
+<title>internalConnectMultiple (1 samples, 0.30%)</title><rect x="790.7" y="581" width="3.6" height="15.0" fill="rgb(237,147,35)" rx="2" ry="2" />
+<text  x="793.67" y="591.5" ></text>
+</g>
+<g >
+<title>(anonymous) (3 samples, 0.91%)</title><rect x="797.9" y="581" width="10.8" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="800.87" y="591.5" ></text>
+</g>
+<g >
+<title>link (1 samples, 0.30%)</title><rect x="841.0" y="533" width="3.6" height="15.0" fill="rgb(235,141,33)" rx="2" ry="2" />
+<text  x="844.04" y="543.5" ></text>
+</g>
+<g >
+<title>require (78 samples, 23.78%)</title><rect x="337.4" y="389" width="280.6" height="15.0" fill="rgb(221,76,18)" rx="2" ry="2" />
+<text  x="340.38" y="399.5" >require</text>
+</g>
+<g >
+<title>anonymous (3 samples, 0.91%)</title><rect x="715.1" y="533" width="10.8" height="15.0" fill="rgb(247,194,46)" rx="2" ry="2" />
+<text  x="718.12" y="543.5" ></text>
+</g>
+<g >
+<title>(anonymous) (1 samples, 0.30%)</title><rect x="761.9" y="517" width="3.6" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="764.89" y="527.5" ></text>
+</g>
+<g >
+<title>anonymous (7 samples, 2.13%)</title><rect x="661.2" y="373" width="25.1" height="15.0" fill="rgb(247,194,46)" rx="2" ry="2" />
+<text  x="664.16" y="383.5" >a..</text>
+</g>
+<g >
+<title>anonymous (9 samples, 2.74%)</title><rect x="654.0" y="405" width="32.3" height="15.0" fill="rgb(247,194,46)" rx="2" ry="2" />
+<text  x="656.96" y="415.5" >an..</text>
+</g>
+<g >
+<title>execute (8 samples, 2.44%)</title><rect x="952.6" y="533" width="28.7" height="15.0" fill="rgb(236,144,34)" rx="2" ry="2" />
+<text  x="955.56" y="543.5" >ex..</text>
+</g>
+<g >
+<title>(anonymous) (1 samples, 0.30%)</title><rect x="769.1" y="533" width="3.6" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="772.09" y="543.5" ></text>
+</g>
+<g >
+<title>(anonymous) (1 samples, 0.30%)</title><rect x="949.0" y="533" width="3.6" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="951.96" y="543.5" ></text>
+</g>
+<g >
+<title>makeSafe (1 samples, 0.30%)</title><rect x="722.3" y="501" width="3.6" height="15.0" fill="rgb(215,46,11)" rx="2" ry="2" />
+<text  x="725.32" y="511.5" ></text>
+</g>
+<g >
+<title>(anonymous) (125 samples, 38.11%)</title><rect x="179.1" y="485" width="449.7" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="182.09" y="495.5" >(anonymous)</text>
+</g>
+<g >
+<title>internal:assert/assertion_error (4 samples, 1.22%)</title><rect x="448.9" y="229" width="14.4" height="15.0" fill="rgb(223,86,20)" rx="2" ry="2" />
+<text  x="451.90" y="239.5" ></text>
+</g>
+<g >
+<title>sendCommand (2 samples, 0.61%)</title><rect x="776.3" y="533" width="7.2" height="15.0" fill="rgb(220,70,16)" rx="2" ry="2" />
+<text  x="779.28" y="543.5" ></text>
+</g>
+<g >
+<title>flat (1 samples, 0.30%)</title><rect x="959.8" y="485" width="3.6" height="15.0" fill="rgb(231,119,28)" rx="2" ry="2" />
+<text  x="962.76" y="495.5" ></text>
+</g>
+<g >
+<title>apply (1 samples, 0.30%)</title><rect x="851.8" y="421" width="3.6" height="15.0" fill="rgb(210,25,6)" rx="2" ry="2" />
+<text  x="854.83" y="431.5" ></text>
+</g>
+<g >
+<title>driveAsyncFunction (1 samples, 0.30%)</title><rect x="1132.4" y="549" width="3.6" height="15.0" fill="rgb(230,115,27)" rx="2" ry="2" />
+<text  x="1135.44" y="559.5" ></text>
+</g>
+<g >
+<title>prependListener (1 samples, 0.30%)</title><rect x="772.7" y="517" width="3.6" height="15.0" fill="rgb(205,1,0)" rx="2" ry="2" />
+<text  x="775.68" y="527.5" ></text>
+</g>
+<g >
+<title>(anonymous) (1 samples, 0.30%)</title><rect x="869.8" y="501" width="3.6" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="872.82" y="511.5" ></text>
+</g>
+<g >
+<title>onwrite (1 samples, 0.30%)</title><rect x="1002.9" y="469" width="3.6" height="15.0" fill="rgb(250,210,50)" rx="2" ry="2" />
+<text  x="1005.93" y="479.5" ></text>
+</g>
+<g >
+<title>connect (4 samples, 1.22%)</title><rect x="819.5" y="613" width="14.3" height="15.0" fill="rgb(244,181,43)" rx="2" ry="2" />
+<text  x="822.45" y="623.5" ></text>
+</g>
+<g >
+<title>anonymous (1 samples, 0.30%)</title><rect x="596.4" y="69" width="3.6" height="15.0" fill="rgb(247,194,46)" rx="2" ry="2" />
+<text  x="599.40" y="79.5" ></text>
+</g>
+<g >
+<title>requestSatisfyUtil (4 samples, 1.22%)</title><rect x="725.9" y="629" width="14.4" height="15.0" fill="rgb(245,188,45)" rx="2" ry="2" />
+<text  x="728.91" y="639.5" ></text>
+</g>
+<g >
+<title>tryCatcher (3 samples, 0.91%)</title><rect x="797.9" y="597" width="10.8" height="15.0" fill="rgb(237,147,35)" rx="2" ry="2" />
+<text  x="800.87" y="607.5" ></text>
+</g>
+<g >
+<title>anonymous (13 samples, 3.96%)</title><rect x="186.3" y="453" width="46.7" height="15.0" fill="rgb(247,194,46)" rx="2" ry="2" />
+<text  x="189.28" y="463.5" >anon..</text>
+</g>
+<g >
+<title>flow (7 samples, 2.13%)</title><rect x="1146.8" y="613" width="25.2" height="15.0" fill="rgb(221,74,17)" rx="2" ry="2" />
+<text  x="1149.83" y="623.5" >f..</text>
+</g>
+<g >
+<title>genDebugFunction (1 samples, 0.30%)</title><rect x="632.4" y="533" width="3.6" height="15.0" fill="rgb(225,95,22)" rx="2" ry="2" />
+<text  x="635.38" y="543.5" ></text>
+</g>
+<g >
+<title>acquire (2 samples, 0.61%)</title><rect x="862.6" y="469" width="7.2" height="15.0" fill="rgb(244,181,43)" rx="2" ry="2" />
+<text  x="865.62" y="479.5" ></text>
+</g>
+<g >
+<title>init (1 samples, 0.30%)</title><rect x="614.4" y="341" width="3.6" height="15.0" fill="rgb(247,193,46)" rx="2" ry="2" />
+<text  x="617.39" y="351.5" ></text>
+</g>
+<g >
+<title>(anonymous) (8 samples, 2.44%)</title><rect x="582.0" y="229" width="28.8" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="585.01" y="239.5" >(a..</text>
+</g>
+<g >
+<title>(anonymous) (1 samples, 0.30%)</title><rect x="851.8" y="437" width="3.6" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="854.83" y="447.5" ></text>
+</g>
+<g >
+<title>bound require (26 samples, 7.93%)</title><rect x="517.3" y="277" width="93.5" height="15.0" fill="rgb(252,218,52)" rx="2" ry="2" />
+<text  x="520.26" y="287.5" >bound require</text>
+</g>
+<g >
+<title>createConnection (1 samples, 0.30%)</title><rect x="833.8" y="613" width="3.6" height="15.0" fill="rgb(238,153,36)" rx="2" ry="2" />
+<text  x="836.84" y="623.5" ></text>
+</g>
+<g >
+<title>RedisRateLimitRepository (5 samples, 1.52%)</title><rect x="844.6" y="501" width="18.0" height="15.0" fill="rgb(226,100,23)" rx="2" ry="2" />
+<text  x="847.63" y="511.5" ></text>
+</g>
+<g >
+<title>forEach (1 samples, 0.30%)</title><rect x="625.2" y="469" width="3.6" height="15.0" fill="rgb(217,57,13)" rx="2" ry="2" />
+<text  x="628.18" y="479.5" ></text>
+</g>
+<g >
+<title>emit (6 samples, 1.83%)</title><rect x="1146.8" y="581" width="21.6" height="15.0" fill="rgb(229,111,26)" rx="2" ry="2" />
+<text  x="1149.83" y="591.5" >e..</text>
+</g>
+<g >
+<title>lookupAndConnect (3 samples, 0.91%)</title><rect x="823.0" y="597" width="10.8" height="15.0" fill="rgb(222,80,19)" rx="2" ry="2" />
+<text  x="826.05" y="607.5" ></text>
+</g>
+<g >
+<title>linkAndEvaluateModule (2 samples, 0.61%)</title><rect x="837.4" y="597" width="7.2" height="15.0" fill="rgb(226,98,23)" rx="2" ry="2" />
+<text  x="840.44" y="607.5" ></text>
+</g>
+<g >
+<title>writeBuffered (2 samples, 0.61%)</title><rect x="895.0" y="469" width="7.2" height="15.0" fill="rgb(241,165,39)" rx="2" ry="2" />
+<text  x="898.00" y="479.5" ></text>
+</g>
+<g >
+<title>link (1 samples, 0.30%)</title><rect x="841.0" y="565" width="3.6" height="15.0" fill="rgb(235,141,33)" rx="2" ry="2" />
+<text  x="844.04" y="575.5" ></text>
+</g>
+<g >
+<title>(anonymous) (1 samples, 0.30%)</title><rect x="1175.6" y="613" width="3.6" height="15.0" fill="rgb(223,87,20)" rx="2" ry="2" />
+<text  x="1178.61" y="623.5" ></text>
+</g>
+<g >
+<title>createDebug (1 samples, 0.30%)</title><rect x="618.0" y="389" width="3.6" height="15.0" fill="rgb(210,26,6)" rx="2" ry="2" />
+<text  x="620.99" y="399.5" ></text>
+</g>
+<g >
+<title>anonymous (109 samples, 33.23%)</title><rect x="233.0" y="437" width="392.2" height="15.0" fill="rgb(247,194,46)" rx="2" ry="2" />
+<text  x="236.05" y="447.5" >anonymous</text>
+</g>
+<g >
+<title>set (1 samples, 0.30%)</title><rect x="758.3" y="565" width="3.6" height="15.0" fill="rgb(218,63,15)" rx="2" ry="2" />
+<text  x="761.29" y="575.5" ></text>
+</g>
+<g >
+<title>acquire (1 samples, 0.30%)</title><rect x="934.6" y="485" width="3.6" height="15.0" fill="rgb(244,181,43)" rx="2" ry="2" />
+<text  x="937.57" y="495.5" ></text>
+</g>
+<g >
+<title>genDebugFunction (2 samples, 0.61%)</title><rect x="618.0" y="405" width="7.2" height="15.0" fill="rgb(225,95,22)" rx="2" ry="2" />
+<text  x="620.99" y="415.5" ></text>
+</g>
+<g >
+<title>bound require (123 samples, 37.50%)</title><rect x="182.7" y="469" width="442.5" height="15.0" fill="rgb(252,218,52)" rx="2" ry="2" />
+<text  x="185.68" y="479.5" >bound require</text>
+</g>
+<g >
+<title>bound require (160 samples, 48.78%)</title><rect x="60.4" y="597" width="575.6" height="15.0" fill="rgb(252,218,52)" rx="2" ry="2" />
+<text  x="63.37" y="607.5" >bound require</text>
+</g>
+<g >
+<title>selectColor (1 samples, 0.30%)</title><rect x="618.0" y="373" width="3.6" height="15.0" fill="rgb(228,106,25)" rx="2" ry="2" />
+<text  x="620.99" y="383.5" ></text>
+</g>
+<g >
+<title>moduleEvaluation (1 samples, 0.30%)</title><rect x="869.8" y="565" width="3.6" height="15.0" fill="rgb(220,71,17)" rx="2" ry="2" />
+<text  x="872.82" y="575.5" ></text>
+</g>
+<g >
+<title>toWritable (2 samples, 0.61%)</title><rect x="902.2" y="517" width="7.2" height="15.0" fill="rgb(211,28,6)" rx="2" ry="2" />
+<text  x="905.20" y="527.5" ></text>
+</g>
+<g >
+<title>_write (32 samples, 9.76%)</title><rect x="999.3" y="485" width="115.2" height="15.0" fill="rgb(214,44,10)" rx="2" ry="2" />
+<text  x="1002.33" y="495.5" >_write</text>
+</g>
+<g >
+<title>shouldUseAutoPipelining (1 samples, 0.30%)</title><rect x="769.1" y="517" width="3.6" height="15.0" fill="rgb(233,133,31)" rx="2" ry="2" />
+<text  x="772.09" y="527.5" ></text>
+</g>
+<g >
+<title>shouldColorize (1 samples, 0.30%)</title><rect x="459.7" y="165" width="3.6" height="15.0" fill="rgb(212,34,8)" rx="2" ry="2" />
+<text  x="462.70" y="175.5" ></text>
+</g>
+<g >
+<title>validateLookupOptions (1 samples, 0.30%)</title><rect x="830.2" y="549" width="3.6" height="15.0" fill="rgb(246,192,45)" rx="2" ry="2" />
+<text  x="833.24" y="559.5" ></text>
+</g>
+<g >
+<title>acquire (54 samples, 16.46%)</title><rect x="941.8" y="597" width="194.2" height="15.0" fill="rgb(244,181,43)" rx="2" ry="2" />
+<text  x="944.77" y="607.5" >acquire</text>
+</g>
+<g >
+<title>writeOrBuffer (33 samples, 10.06%)</title><rect x="995.7" y="501" width="118.8" height="15.0" fill="rgb(242,173,41)" rx="2" ry="2" />
+<text  x="998.73" y="511.5" >writeOrBuffer</text>
+</g>
+<g >
+<title>bound (1 samples, 0.30%)</title><rect x="596.4" y="37" width="3.6" height="15.0" fill="rgb(251,211,50)" rx="2" ry="2" />
+<text  x="599.40" y="47.5" ></text>
+</g>
+<g >
+<title>Promise (1 samples, 0.30%)</title><rect x="970.5" y="469" width="3.6" height="15.0" fill="rgb(215,48,11)" rx="2" ry="2" />
+<text  x="973.55" y="479.5" ></text>
+</g>
+<g >
+<title>runConcurrentRequests (4 samples, 1.22%)</title><rect x="923.8" y="581" width="14.4" height="15.0" fill="rgb(214,42,10)" rx="2" ry="2" />
+<text  x="926.78" y="591.5" ></text>
+</g>
+</g>
+</svg>

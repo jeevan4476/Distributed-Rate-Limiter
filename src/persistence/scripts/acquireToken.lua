@@ -5,36 +5,33 @@ local refillRate = tonumber(ARGV[2])
 local now = tonumber(ARGV[3])
 local requested = tonumber(ARGV[4])
 
--- checking idempotency
-if redis.call("EXISTS", idKey) == 1 then
-    return redis.call("HGETALL",idKey)
+-- Checking idempotency: Fast HMGET lookup (no redundant EXISTS call)
+local cached = redis.call("HMGET", idKey, "status", "tokens_remaining", "wait_time_ms")
+if cached[1] and cached[1] ~= false then
+    return { cached[1], cached[2], cached[3] }
 end
 
--- loading buket 
-local raw = redis.call("HGETALL",bucketKey)
+-- Fast positional load of bucket parameters (no HGETALL table loop)
+local raw = redis.call("HMGET", bucketKey, "tokens", "last_refill_at")
 local tokens, lastRefill
 
-if #raw ==0 then
+if not raw[1] or raw[1] == false then
     tokens = capacity
-    lastRefill =now
+    lastRefill = now
 else
-    local data = {}
-    for i = 1, #raw , 2 do
-        data[raw[i]] = raw[i+1]
-    end
-    tokens = tonumber(data["tokens"])
-    lastRefill = tonumber(data["last_refill_at"])
+    tokens = tonumber(raw[1])
+    lastRefill = tonumber(raw[2])
 end
 
---refill tokens 
+-- Refill tokens
 local delta = math.max(0, now - lastRefill)
 local refill = (delta / 1000) * refillRate
 tokens = math.min(capacity, tokens + refill)
 
-local status 
+local status
 local waitTime = 0
 
--- try to acqurie
+-- Try to acquire
 if tokens >= requested then 
     tokens = tokens - requested
     status = "ALLOWED"
@@ -43,28 +40,20 @@ else
     waitTime = math.ceil(((requested - tokens) / refillRate) * 1000)
 end
 
--- save bucket
-redis.call("HMSET", bucketKey,
-    "tokens", tokens,
-    "last_refill_at", lastRefill,
-    "capacity", capacity,
-    "refill_rate", refillRate
+-- Save bucket state
+redis.call("HSET", bucketKey,
+    "tokens", tostring(tokens),
+    "last_refill_at", tostring(now) -- FIXED: Advance timestamp to current 'now'
 )
-
---ttl
 redis.call("PEXPIRE", bucketKey, 60000)
 
--- save results
-redis.call("HMSET", idKey,
+-- Save idempotency record
+redis.call("HSET", idKey,
     "status", status,
-    "tokens_remaining", tokens,
-    "wait_time_ms", waitTime
+    "tokens_remaining", tostring(tokens),
+    "wait_time_ms", tostring(waitTime)
 )
-
 redis.call("PEXPIRE", idKey, 60000)
 
-return {
-    "status", status,
-    "tokens_remaining", tokens,
-    "wait_time_ms", waitTime
-}
+-- Return positional array: [status, tokens_remaining, wait_time_ms]
+return { status, tostring(tokens), tostring(waitTime) }

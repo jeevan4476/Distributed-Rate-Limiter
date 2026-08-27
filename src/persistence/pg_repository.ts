@@ -73,11 +73,41 @@ export class PostgresRateLimitRepository implements SqlRateLimitRepository,RateL
 
 
     async acquire(
-    ctx: { requestId: string },
-    logicalKey: string,
-    cost: number,
-    defaultCapacity: number,
-    defaultRefillRate: number
+        ctx: { requestId: string },
+        logicalKey: string,
+        cost: number,
+        defaultCapacity: number,
+        defaultRefillRate: number
+    ): Promise<AcquireResult> {
+        try {
+            // High-throughput 1-RTT execution via atomic PL/pgSQL function
+            const res = await this.pool.query(
+                `SELECT result_status, tokens_remaining, wait_time_ms 
+                 FROM fn_acquire_rate_limit_token($1, $2, $3, $4, $5, NOW())`,
+                [ctx.requestId, logicalKey, cost, defaultCapacity, defaultRefillRate]
+            );
+
+            const row = res.rows[0];
+            return {
+                status: row.result_status as AcquireResultStatus,
+                tokensRemaining: parseFloat(row.tokens_remaining),
+                waitTimeMs: parseInt(row.wait_time_ms, 10)
+            };
+        } catch (err: any) {
+            // Fallback to explicit transaction if stored procedure is not defined in DB
+            if (err.code === '42883') {
+                return this.acquireWithClientTx(ctx, logicalKey, cost, defaultCapacity, defaultRefillRate);
+            }
+            throw err;
+        }
+    }
+
+    async acquireWithClientTx(
+        ctx: { requestId: string },
+        logicalKey: string,
+        cost: number,
+        defaultCapacity: number,
+        defaultRefillRate: number
     ): Promise<AcquireResult> {
         const client: PoolClient = await this.pool.connect();
         try{

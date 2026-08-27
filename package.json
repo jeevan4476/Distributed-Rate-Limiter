@@ -12,7 +12,10 @@
     "proto:generate": "bunx protoc --plugin=./node_modules/.bin/protoc-gen-ts_proto --ts_proto_out=./src/proto --ts_proto_opt=outputServices=grpc-js --ts_proto_opt=esModuleInterop=true --proto_path=src/proto src/proto/ratelimit.proto",
     "demo": "./demo.sh",
     "example:basic": "bun run examples/basic_usage.ts",
-    "example:burst": "bun run examples/burst_demo.ts"
+    "example:burst": "bun run examples/burst_demo.ts",
+    "build": "bunx tsc && mkdir -p dist/persistence/scripts && cp src/persistence/scripts/*.lua dist/persistence/scripts/",
+    "profile:v8": "./tools/profile_v8.sh",
+    "profile:perf": "./tools/profile_perf.sh"
   },
   "keywords": [],
   "author": "",
@@ -32,6 +35,8 @@
     "uuid": "^13.0.0"
   },
   "devDependencies": {
+    "0x": "^6.0.0",
+    "autocannon": "^8.0.0",
     "bun-types": "latest",
     "grpc-tools": "^1.13.1",
     "ts-proto": "^2.11.0"
