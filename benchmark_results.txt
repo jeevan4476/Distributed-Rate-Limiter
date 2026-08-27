@@ -1,31 +1,64 @@
-Postgres:
+HISTORICAL BASELINE BENCHMARKS (v1.0 - Initial Codebase)
+
+PostgreSQL (SERIALIZABLE Isolation, 6-RTT Client Transactions):
 Scenario 1: Low Contention (1000 reqs, 20 concurrency)
-Total Time: 283.29ms
-Throughput: 3529.93 RPS
-Latency P50: 3.45ms
-Latency P95: 15.47ms
-Latency P99: 31.54ms
+  Total Time: 283.29ms
+  Throughput: 3529.93 RPS
+  Latency P50: 3.45ms
+  Latency P95: 15.47ms
+  Latency P99: 31.54ms
 
-Scenario 2: High Contention (200 reqs, 10 concurrency)
-Total Time: 159.23ms
-Throughput: 1256.05 RPS
-Latency P50: 0.68ms
-Latency P95: 39.84ms
-Latency P99: 40.75ms
+Scenario 2: High Contention (200 reqs, 10 concurrency, single key)
+  Total Time: 159.23ms
+  Throughput: 1256.05 RPS
+  Latency P50: 0.68ms
+  Latency P95: 39.84ms
+  Latency P99: 40.75ms
 
-
-
-Redis:
+Redis (HGETALL + Table Loop Parsing, Stale Timestamp Bug):
 Scenario 1: Low Contention (1000 reqs, 20 concurrency)
-Total Time: 68.33ms
-Throughput: 14634.08 RPS
-Latency P50: 1.07ms
-Latency P95: 3.13ms
-Latency P99: 4.02ms
+  Total Time: 68.33ms
+  Throughput: 14634.08 RPS (or peak ~18,510 RPS)
+  Latency P50: 1.07ms (or 0.95ms)
+  Latency P95: 3.13ms (or 2.59ms)
+  Latency P99: 4.02ms (or 2.87ms)
 
-Scenario 2: High Contention (200 reqs, 10 concurrency)
-Total Time: 22.46ms
-Throughput: 8903.97 RPS
-Latency P50: 0.93ms
-Latency P95: 2.65ms
-Latency P99: 2.71ms
+Scenario 2: High Contention (200 reqs, 10 concurrency, single key)
+  Total Time: 22.46ms
+  Throughput: 8903.97 RPS (or peak ~10,715 RPS)
+  Latency P50: 0.93ms (or 0.71ms)
+  Latency P95: 2.65ms (or 3.91ms)
+  Latency P99: 2.71ms (or 4.11ms)
+
+
+CURRENT BENCHMARKS (v1.1 - Positional HMGET Array, Refill Bug Fixed, 1-RTT Function)
+
+PostgreSQL (1-RTT Atomic PL/pgSQL Function):
+Scenario 1: Low Contention (1000 reqs, 20 concurrency)
+  Total Time: 488.51ms
+  Throughput: 2047.05 RPS
+  Latency P50: 8.01ms
+  Latency P95: 15.44ms
+  Latency P99: 60.19ms
+
+Scenario 2: High Contention (200 reqs, 10 concurrency, single key)
+  Total Time: 896.34ms
+  Throughput: 223.13 RPS
+  Latency P50: 17.02ms
+  Latency P95: 88.57ms
+  Latency P99: 891.92ms
+
+Redis (Zero-Allocation Positional HMGET + Correct Monotonic Refill Clock):
+Scenario 1: Low Contention (1000 reqs, 20 concurrency)
+  Total Time: 61.90ms
+  Throughput: 16155.03 RPS
+  Latency P50: 0.89ms
+  Latency P95: 3.24ms
+  Latency P99: 3.96ms
+
+Scenario 2: High Contention (200 reqs, 10 concurrency, single key)
+  Total Time: 12.53ms
+  Throughput: 15955.83 RPS
+  Latency P50: 0.52ms
+  Latency P95: 2.02ms
+  Latency P99: 2.07ms

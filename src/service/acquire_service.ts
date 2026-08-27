@@ -1,8 +1,9 @@
-import { PoolClient } from 'pg';
 import {
     AcquireResult,
     AcquireResultStatus,
     FatalError,
+    SerializationError,
+    DeadlockError,
     Logger,
     RateLimitRepository
 } from '../domain/types';
@@ -55,9 +56,8 @@ export class AcquireService {
                 return result;
 
             } catch (err: any) {
-                // Serialization / deadlock errors are Postgres-specific
-                // Redis never throws these (Lua is atomic)
-                if (err.code === '40001' || err.code === '40P01') {
+                // Retry transient concurrency conflicts (serialization failures or deadlocks)
+                if (err instanceof SerializationError || err instanceof DeadlockError) {
                     if (attempt > this.config.maxRetries) {
                         throw new FatalError('Max retries exceeded', err);
                     }

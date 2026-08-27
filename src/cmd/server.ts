@@ -3,11 +3,10 @@ import * as protoLoader from '@grpc/proto-loader';
 import path from 'path';
 import dotenv from 'dotenv';
 import { PostgresRateLimitRepository } from '../persistence/pg_repository';
-import { RateLimitDomainService } from '../domain/service';
 import { RateLimitGrpcHandler } from '../transport/grpc_handler';
 import { Logger } from '../domain/types';
 import { AcquireService } from '../service/acquire_service';
-import { RedisRateLimitRepository } from '../persistence/redis_reporistory';
+import { RedisRateLimitRepository } from '../persistence/redis_repository';
 import { AdminService } from '../service/admin_service';
 import { AdminGrpcHandler } from '../transport/admin_grpc_handler';
 
@@ -46,15 +45,14 @@ async function main() {
     const backend = process.env.BACKEND || 'postgres';
     consoleLogger.info(`Starting with backend: ${backend}`);
     let repo: PostgresRateLimitRepository | RedisRateLimitRepository;
-   
-     if (backend === 'redis') {
+
+    if (backend === 'redis') {
         const redisUrl = process.env.REDIS_URL;
         if (!redisUrl) {
             console.error('REDIS_URL is required when BACKEND=redis');
             process.exit(1);
         }
         repo = new RedisRateLimitRepository(redisUrl);
-
     } else {
         const dbUrl = process.env.DATABASE_URL;
         if (!dbUrl) {
@@ -64,34 +62,30 @@ async function main() {
         repo = new PostgresRateLimitRepository(dbUrl);
     }
 
-    const service = new AcquireService(repo as any, consoleLogger, config);
-    const handler = new RateLimitGrpcHandler(service);
-    
-    const adminService = new AdminService(
-        backend === 'postgres' ? (repo as any).getPool(): null,
-        backend
-    );
+    const service = new AcquireService(repo, consoleLogger, config);
+    const handler = new RateLimitGrpcHandler(service, repo);
+
+    const adminService = new AdminService(repo);
     const adminHandler = new AdminGrpcHandler(adminService);
-    
+
     const server = new grpc.Server();
 
-    
     server.addService(rateLimitProto.RateLimiter.service, {
         Acquire: handler.acquire,
         HealthCheck: handler.healthCheck
     });
 
-    server.addService(rateLimitProto.Admin.service,{
+    server.addService(rateLimitProto.Admin.service, {
         ResetBucket: adminHandler.resetBucket,
         GetBucketStats: adminHandler.getBucketStats,
         ListBuckets: adminHandler.listBuckets,
-    })
+    });
 
     const bindAddr = process.env.BIND_ADDR || '0.0.0.0:50051';
 
     server.bindAsync(bindAddr, grpc.ServerCredentials.createInsecure(), (err, port) => {
         if (err) {
-            console.error(err);
+            console.error('Bind failed:', err);
             return;
         }
         console.log(`Server listening on ${bindAddr}`);

@@ -34,7 +34,7 @@ fi
 
 # 1. Verify Redis
 if ! nc -z localhost 6379 2>/dev/null; then
-    echo "⚠️  Redis not running on port 6379. Starting Redis via docker..."
+    echo "  Redis not running on port 6379. Starting Redis via docker..."
     docker run -d --name redis-rate-limit-perf -p 6379:6379 redis:alpine || true
     sleep 2
 fi

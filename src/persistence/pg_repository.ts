@@ -1,8 +1,11 @@
 import { Pool, PoolClient } from 'pg';
 import {
     RateLimitRepository,
+    AdminRepository,
     AcquireResultStatus,
     AcquireResult,
+    SerializationError,
+    DeadlockError
 } from '../domain/types';
 import { calculateTokenConsumption } from '../domain/token_bucket';
 
@@ -54,7 +57,7 @@ export interface SqlRateLimitRepository {
     ): Promise<void>;
 }
 
-export class PostgresRateLimitRepository implements SqlRateLimitRepository,RateLimitRepository {
+export class PostgresRateLimitRepository implements SqlRateLimitRepository, RateLimitRepository, AdminRepository {
     private pool: Pool;
 
     constructor(connectionString: string) {
@@ -97,6 +100,12 @@ export class PostgresRateLimitRepository implements SqlRateLimitRepository,RateL
             // Fallback to explicit transaction if stored procedure is not defined in DB
             if (err.code === '42883') {
                 return this.acquireWithClientTx(ctx, logicalKey, cost, defaultCapacity, defaultRefillRate);
+            }
+            if (err.code === '40001') {
+                throw new SerializationError(err.message);
+            }
+            if (err.code === '40P01') {
+                throw new DeadlockError(err.message);
             }
             throw err;
         }
@@ -154,6 +163,12 @@ export class PostgresRateLimitRepository implements SqlRateLimitRepository,RateL
         }
         catch(err: any){
             await client.query('ROLLBACK');
+            if (err.code === '40001') {
+                throw new SerializationError(err.message);
+            }
+            if (err.code === '40P01') {
+                throw new DeadlockError(err.message);
+            }
             throw err;
         }finally{
             client.release();
@@ -247,6 +262,65 @@ export class PostgresRateLimitRepository implements SqlRateLimitRepository,RateL
              VALUES ($1, $2, $3, $4, $5)`,
             [requestId, bucketKey, result.status, result.tokensRemaining, result.waitTimeMs]
         );
+    }
+
+    async ping(): Promise<boolean> {
+        try {
+            await this.pool.query('SELECT 1');
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    async resetBucket(key: string): Promise<number> {
+        const res = await this.pool.query(
+            `UPDATE rate_limit_buckets
+             SET tokens = capacity, last_refill_at = NOW()
+             WHERE key = $1
+             RETURNING tokens`,
+            [key]
+        );
+        if (res.rows.length === 0) throw new Error(`Bucket not found: ${key}`);
+        return parseFloat(res.rows[0].tokens);
+    }
+
+    async getBucketStats(key: string) {
+        const res = await this.pool.query(
+            `SELECT key, tokens, capacity, refill_rate
+             FROM rate_limit_buckets WHERE key = $1`,
+            [key]
+        );
+        if (res.rows.length === 0) throw new Error(`Bucket not found: ${key}`);
+        const row = res.rows[0];
+        const tokens = parseFloat(row.tokens);
+        const capacity = parseFloat(row.capacity);
+        const refillRate = parseFloat(row.refill_rate);
+        return {
+            key: row.key,
+            tokens,
+            capacity,
+            refillRate,
+            fillPercent: capacity > 0 ? (tokens / capacity) * 100 : 0
+        };
+    }
+
+    async listBuckets() {
+        const res = await this.pool.query(
+            `SELECT key, tokens, capacity, refill_rate FROM rate_limit_buckets`
+        );
+        return res.rows.map(row => {
+            const tokens = parseFloat(row.tokens);
+            const capacity = parseFloat(row.capacity);
+            const refillRate = parseFloat(row.refill_rate);
+            return {
+                key: row.key,
+                tokens,
+                capacity,
+                refillRate,
+                fillPercent: capacity > 0 ? (tokens / capacity) * 100 : 0
+            };
+        });
     }
 
     async close() {

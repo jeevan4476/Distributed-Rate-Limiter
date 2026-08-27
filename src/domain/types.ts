@@ -37,9 +37,23 @@ export class FatalError extends RateLimitError {
     }
 }
 
+export interface BucketStats {
+    key: string;
+    tokens: number;
+    capacity: number;
+    refillRate: number;
+    fillPercent: number;
+}
+
+export interface AdminRepository {
+    resetBucket(key: string): Promise<number>;
+    getBucketStats(key: string): Promise<BucketStats>;
+    listBuckets(): Promise<BucketStats[]>;
+}
+
 export interface RateLimitRepository {
     /**
-     * Attempts to acquire tokens in a single serializable transaction.
+     * Attempts to acquire tokens in an atomic transaction or script.
      * @throws SerializationError if transaction fails due to concurrency
      * @throws FatalError for connection issues
      */
@@ -50,6 +64,16 @@ export interface RateLimitRepository {
         defaultCapacity: number,
         defaultRefillRate: number
     ): Promise<AcquireResult>;
+
+    /**
+     * Probes the underlying store connectivity.
+     */
+    ping(): Promise<boolean>;
+
+    /**
+     * Gracefully closes pool or socket connections.
+     */
+    close(): Promise<void>;
 }
 
 export interface Logger {

@@ -4,7 +4,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { AcquireService } from '../../service/acquire_service';
 import { PostgresRateLimitRepository } from '../../persistence/pg_repository';
 import { Logger } from '../../domain/types';
-import { RedisRateLimitRepository } from '../../persistence/redis_reporistory';
+import { RedisRateLimitRepository } from '../../persistence/redis_repository';
 
 const logger: Logger = {
     info: () => { }, // Silence info for perf

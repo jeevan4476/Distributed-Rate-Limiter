@@ -1,254 +1,174 @@
-# Distributed Rate Limiter
+# Centralized Rate Limiter Service
 
-A production-grade distributed rate limiter using the **Token Bucket** algorithm, exposed via **gRPC**, with support for two pluggable backends — **PostgreSQL** (durable, ACID) and **Redis** (in-memory, high-throughput).
+A high-performance rate-limiting service using the **Token Bucket** algorithm, exposed via **gRPC**, with dual-backend support:
+- **Redis (High-Throughput Tier):** 1-RTT atomic Lua script with zero-allocation positional array parsing and persistent policy semantics.
+- **PostgreSQL (Durable/Audit Tier):** 1-RTT atomic PL/pgSQL stored procedure (`fn_acquire_rate_limit_token`) using row-level locking (`FOR UPDATE`) and relational idempotency auditing.
 
-Built with TypeScript and Bun.
+Engineered with TypeScript and Bun.
 
 ---
 
-## Architecture
+## Architecture Overview
 
-![Architecture Diagram](docs/architecture.svg)
+```text
+┌─────────────────┐
+│   gRPC Client   │
+└────────┬────────┘
+         │ (HTTP/2 - Protobuf)
+         ▼
+┌──────────────────────────────────────────────────────────┐
+│ RateLimitGrpcHandler (Input Validation & Error Mapping)   │
+└────────┬─────────────────────────────────────────────────┘
+         │
+         ▼
+┌──────────────────────────────────────────────────────────┐
+│ AcquireService (Retries, Exponential Backoff, Metrics)   │
+└────────┬─────────────────────────────────────────────────┘
+         │
+         ▼
+┌──────────────────────────────────────────────────────────┐
+│ RateLimitRepository Interface                            │
+└────────┬────────────────────────────────┬────────────────┘
+         │                                │
+         ▼                                ▼
+┌──────────────────────┐        ┌─────────────────────────┐
+│ Redis Repository     │        │ PostgreSQL Repository   │
+│ • 1-RTT Lua Script   │        │ • 1-RTT Stored Procedure│
+│ • Zero-alloc HMGET   │        │ • Row-level FOR UPDATE  │
+│ • Dynamic TTL        │        │ • Relational Audit Log  │
+└──────────────────────┘        └─────────────────────────┘
+```
 
-### Layer Breakdown
+### Layer Responsibilities
 
 | Layer | File | Responsibility |
 |---|---|---|
-| Transport | `grpc_handler.ts` | Receives gRPC calls, validates inputs, maps responses |
-| Service | `acquire_service.ts` | Orchestrates acquire flow, handles retries with backoff |
-| Domain | `token_bucket.ts` | Pure token bucket algorithm — no I/O, fully testable |
-| Persistence | `pg_repository.ts` / `redis_repository.ts` | Backend-specific atomicity |
-
-### Design Decisions
-
-**Why Token Bucket?**
-
-Token bucket allows burst traffic up to the bucket capacity, then smoothly limits to the refill rate. Unlike fixed window (which can allow 2x traffic at window boundaries) or sliding window (expensive to compute), token bucket gives natural, tunable behavior with a simple state model — just `tokens` and `last_refill_at`.
-
-**Why PostgreSQL uses SERIALIZABLE isolation?**
-
-With READ COMMITTED, two concurrent requests can both read the same stale token count, both decide they have enough, and both commit — consuming more tokens than actually existed. SERIALIZABLE forces PostgreSQL to detect this conflict and abort one transaction, which then retries.
-
-
-**Why Idempotency?**
-
-Network failures cause clients to retry. Without idempotency, a retry after a successful-but-timed-out request would consume tokens twice. Each request carries a `requestId` (UUID). The first call saves the result; replays return the cached result without touching the bucket.
+| **Transport** | `src/transport/grpc_handler.ts` | Validates UUIDs/key bounds, checks datastore health (`ping`), translates domain errors to gRPC status codes. |
+| **Service** | `src/service/acquire_service.ts` | Orchestrates token acquisition, applies exponential backoff on transient concurrency errors (`SerializationError`, `DeadlockError`). |
+| **Domain** | `src/domain/token_bucket.ts` | Mathematical reference model for token consumption and clock skew handling. Store engines execute compiled projections (Lua/SQL). |
+| **Admin** | `src/service/admin_service.ts` | Administrative operations (bucket resets, utilization inspections) decoupled behind `AdminRepository`. |
+| **Persistence** | `src/persistence/` | Engine-specific atomic execution (`redis_repository.ts`, `pg_repository.ts`). |
 
 ---
 
-## Performance
+## Measured Performance (v1.1)
 
-Benchmarked locally with Bun on the same machine for both backends.
+Benchmarks executed locally via Bun under identical hardware conditions.
 
-### Scenario 1 — Low Contention (1000 requests, 20 concurrent workers, unique keys)
+### Scenario 1 — Low Contention (1,000 requests, 20 concurrent workers, unique keys)
 
-| Backend | Throughput | P50 | P95 | P99 |
+| Backend | Throughput | Latency P50 | Latency P95 | Latency P99 |
 |---|---|---|---|---|
-| PostgreSQL | 3,529 RPS | 3.45ms | 15.47ms | 31.54ms |
-| Redis | 18,510 RPS | 0.95ms | 2.59ms | 2.87ms |
-| **Improvement** | **5.2x** | **3.6x** | **6.0x** | **11.0x** |
+| PostgreSQL (1-RTT Function) | 2,047 RPS | 8.01 ms | 15.44 ms | 60.19 ms |
+| Redis (Positional HMGET Lua) | 16,155 RPS | 0.89 ms | 3.24 ms | 3.96 ms |
+| **Performance Delta** | **7.9x faster** | **9.0x faster** | **4.8x faster** | **15.2x faster** |
 
-### Scenario 2 — High Contention (200 requests, 10 concurrent workers, same key)
+### Scenario 2 — High Contention (200 requests, 10 concurrent workers, single hot key)
 
-| Backend | Throughput | P50 | P95 | P99 |
+| Backend | Throughput | Latency P50 | Latency P95 | Latency P99 |
 |---|---|---|---|---|
-| PostgreSQL | 1,256 RPS | 0.68ms | 39.84ms | 40.75ms |
-| Redis | 10,715 RPS | 0.71ms | 3.91ms | 4.11ms |
-| **Improvement** | **8.5x** | **~same** | **10.2x** | **9.9x** |
+| PostgreSQL (Row Lock Convoy) | 223 RPS | 17.02 ms | 88.57 ms | 891.92 ms |
+| Redis (Atomic Event Loop) | 15,955 RPS | 0.52 ms | 2.02 ms | 2.07 ms |
+| **Performance Delta** | **71.5x faster** | **32.7x faster** | **43.8x faster** | **430.8x faster** |
 
-**Key insight:** Redis P99 stays flat (2.87ms → 4.11ms) when contention increases. PostgreSQL P99 spikes (31.54ms → 40.75ms) because serialization conflicts force retries. For shared hot-key scenarios, Redis is the clear choice.
+### Critical Engineering Findings & Tradeoffs
 
-### When to Choose Each Backend
+1. **Why PostgreSQL Collapsed Under Hot-Key Contention (223 RPS):**
+   In v1.0, PostgreSQL used multi-RTT `SERIALIZABLE` isolation where conflicting transactions aborted immediately with SQLSTATE `40001` and backed off with jitter (~1,256 RPS). In v1.1, the 1-RTT stored procedure uses `SELECT ... FOR UPDATE`, forcing concurrent workers to queue sequentially on the exact same row lock. This creates a **lock convoy** in PostgreSQL shared buffers: all transactions serialize on physical row locks and WAL buffer synchronization, pushing P99 latency to 891ms. See [ADR 001](docs/adr/001-pg-role-and-contention-tradeoffs.md).
+2. **Why Redis Sustains ~16k RPS Under Contention:**
+   Redis operates on a single-threaded event loop. By replacing `HGETALL` and dictionary allocations with positional `HMGET` array access, each Lua invocation completes in microseconds with zero memory allocations inside the Lua VM.
+3. **Datastore Role Alignment:**
+   - **Redis:** High-throughput coordination plane for high-frequency API rate limiting.
+   - **PostgreSQL:** Durable audit plane for strict billing compliance, enterprise quotas, and administrative visibility.
 
-| | PostgreSQL | Redis |
-|---|---|---|
-| Durability | ✓ Survives restarts | X In-memory (persistence optional) |
-| Audit log | ✓ Full history in idempotency_keys | X TTL-based, expires |
-| Throughput | ~3,500 RPS | ~18,500 RPS |
-| Tail latency under contention | Degrades (retries) | Stays flat (Lua atomic) |
-| Best for | Billing / quota enforcement | API rate limiting |
+---
+
+## Architectural Semantics & Fixes
+
+### 1. Redis Policy Persistence & Dynamic TTL
+Previous iterations suffered from policy drift: capacity and refill rates were supplied as invocation arguments on every request, meaning changing environment variables mutated live buckets, and an idle bucket was purged after a static 60s TTL (resetting burst allowances).
+* **Fix:** The Lua script persists `capacity` and `refill_rate` into the Redis Hash upon creation.
+* **Dynamic TTL:** Keys expire only after at least 2x the duration needed to refill from empty to full:
+  $$\text{TTL}_{\text{ms}} = \max\left(60000, \frac{\text{capacity}}{\text{refill\_rate}} \times 2000\right)$$
+* **Idempotency Window:** Idempotency records are held for a dedicated 5-minute window (`300,000ms`).
+
+### 2. Typed Domain Error Boundary
+`AcquireService` does not leak SQLSTATE codes or storage driver types. The repositories map lower-level exceptions into typed domain classes:
+* `SerializationError` (SQLSTATE `40001`) -> Retried with truncated exponential backoff + jitter.
+* `DeadlockError` (SQLSTATE `40P01`) -> Retried.
+* `FatalError` -> Halts retries immediately.
+
+### 3. Active Datastore Health Checks
+The gRPC `HealthCheck` endpoint executes a live round-trip probe (`PING` on Redis, `SELECT 1` on PostgreSQL) rather than returning a static response. If the datastore disconnects, `HealthCheck` returns `UNAVAILABLE`.
+
+---
+
+## System Classification & The Path to 100k RPS
+
+### Current Classification: Centralized Multi-Process Service
+The system currently deploys as a multi-process service sharing a centralized datastore. It is not yet a multi-sharded distributed system with consistent hashing or partition tolerance.
+
+### Physical Ceiling of the Current Architecture
+A single-threaded Redis instance handling 1 network RTT and 1 idempotency write per acquire hits a physical ceiling at 16k–25k RPS. Reaching 100k+ RPS cannot be achieved by micro-optimizing Lua scripts.
+
+### Target Architecture: Edge-Local Token Leases (The 100k Roadmap)
+To scale beyond 100,000 RPS:
+1. **Local Quota Leases:** Each app worker process leases a batch of tokens (e.g., 50–100) from Redis in one atomic operation.
+2. **In-Memory Decisions:** Subsequent client requests are evaluated against local CPU memory (<50 nanoseconds, zero network I/O).
+3. **Asynchronous Batch Reconciliation:** Depleted tokens are reconciled asynchronously via batched increments or background gossip sync.
+4. **Tradeoff:** Rate limiting transitions from strict global synchrony to approximate global accuracy within a small sync interval window.
 
 ---
 
 ## Quick Start
 
 ### Prerequisites
-
 - Docker and Docker Compose
-- Bun (for running benchmarks and tests)
+- Bun runtime (`curl -fsSL https://bun.sh/install | bash`)
 
-### Run with PostgreSQL (default)
-
-```bash
-docker compose up
-```
-
-### Run with Redis
+### Start Infrastructure
 
 ```bash
-BACKEND=redis docker compose up
+# Start PostgreSQL and Redis containers
+docker compose up -d postgres redis
 ```
 
-Both backends start regardless — the app connects to whichever `BACKEND` specifies.
+### Run Server
 
----
+```bash
+# Start gRPC server backed by Redis (Default port: 50051)
+BACKEND=redis REDIS_URL="redis://localhost:6379" bun run src/cmd/server.ts
 
-## API
-
-Defined in `src/proto/ratelimit.proto`.
-
-```protobuf
-service RateLimiter {
-  rpc Acquire(AcquireRequest) returns (AcquireResponse)
-}
+# Start gRPC server backed by PostgreSQL
+BACKEND=postgres DATABASE_URL="postgresql://postgres:postgres@localhost:5432/ratelimiter" bun run src/cmd/server.ts
 ```
 
-### AcquireRequest
+### Run Tests and Benchmarks
 
-| Field | Type | Description |
-|---|---|---|
-| `logical_key` | string | Resource identifier e.g. `user:123`, `api:payments` |
-| `cost` | uint32 | Tokens to consume. Must be > 0 |
-| `request_id` | string | Client-generated UUIDv4 for idempotency. Required |
+```bash
+# Run unit tests (Reference domain math & failure semantics)
+bun test src/test/unit
 
-### AcquireResponse
+# Run integration tests (Live PostgreSQL verification)
+bun test src/test/integration
 
-| Field | Type | Description |
-|---|---|---|
-| `verdict` | enum | `ALLOWED` or `DENIED` |
-| `remaining` | double | Token balance after this request |
-| `retry_after` | Duration | How long to wait if DENIED. Zero if ALLOWED |
-
-### Example
-
-```typescript
-const response = await client.acquire({
-  requestId: crypto.randomUUID(),
-  logicalKey: 'user:123',
-  cost: 3
-});
-
-if (response.verdict === 'ALLOWED') {
-  // proceed — 3 tokens consumed
-} else {
-  // back off for response.retryAfter seconds
-}
+# Run performance benchmark suite
+BACKEND=redis REDIS_URL="redis://localhost:6379" bun run src/test/perf/benchmark.ts
+BACKEND=postgres DATABASE_URL="postgresql://postgres:postgres@localhost:5432/ratelimiter" bun run src/test/perf/benchmark.ts
 ```
 
 ---
 
-## Configuration
-
-All configuration via environment variables.
+## Configuration Reference
 
 | Variable | Default | Description |
 |---|---|---|
-| `BACKEND` | `postgres` | `postgres` or `redis` |
-| `DATABASE_URL` | — | Required when `BACKEND=postgres` |
-| `REDIS_URL` | — | Required when `BACKEND=redis` |
-| `DEFAULT_CAPACITY` | `10` | Max tokens per bucket |
-| `DEFAULT_REFILL_RATE` | `1` | Tokens refilled per second |
-| `MAX_RETRIES` | `3` | Max retries on serialization failure (Postgres only) |
-| `BASE_BACKOFF_MS` | `50` | Base retry backoff in ms |
-| `MAX_BACKOFF_MS` | `500` | Max retry backoff cap in ms |
-| `BIND_ADDR` | `0.0.0.0:50051` | gRPC server bind address |
-
----
-
-## Data Model
-
-### PostgreSQL
-
-```sql
-rate_limit_buckets
-  key             TEXT PRIMARY KEY   -- logical key e.g. "user:123"
-  tokens          DOUBLE PRECISION   -- current token count
-  last_refill_at  TIMESTAMPTZ        -- last time tokens were refilled
-  capacity        DOUBLE PRECISION   -- max tokens
-  refill_rate     DOUBLE PRECISION   -- tokens per second
-
-idempotency_keys
-  request_id      UUID PRIMARY KEY   -- client-generated UUID
-  bucket_key      TEXT               -- which bucket this was for
-  result_status   TEXT               -- ALLOWED or DENIED
-  tokens_remaining DOUBLE PRECISION
-  wait_time_ms    BIGINT
-  created_at      TIMESTAMPTZ
-```
-
-### Redis
-
-```
-bucket:{logicalKey}       → Hash { tokens, last_refill_at, capacity, refill_rate }  TTL: 60s
-idempotency:{requestId}   → Hash { status, tokens_remaining, wait_time_ms }          TTL: 60s
-```
-
----
-
-## Testing
-
-```bash
-# Unit tests (token bucket algorithm — no infrastructure needed)
-bun test src/test/unit
-
-# Integration tests (requires Docker Compose running)
-bun test src/test/integration
-
-# Benchmark — PostgreSQL
-BACKEND=postgres bun run src/test/perf/benchmark.ts
-
-# Benchmark — Redis
-BACKEND=redis bun run src/test/perf/benchmark.ts
-```
-
-### Test Coverage
-
-- Token bucket refill logic
-- Capacity capping
-- Clock skew handling
-- Idempotency (same requestId returns same result, tokens consumed only once)
-- Concurrency (N=20 parallel requests on capacity=10 — exactly ≤10 allowed)
-- Key independence (different logical keys don't affect each other)
-
----
-
-## The Request Flow
-
-```
-1. Client sends: { requestId, logicalKey, cost }
-2. grpc_handler validates inputs
-3. AcquireService calls repo.acquire()
-
-PostgreSQL path:
-  4. BEGIN SERIALIZABLE transaction
-  5. Check idempotency_keys — if hit, COMMIT and return cached result
-  6. SELECT ... FOR UPDATE on rate_limit_buckets (row lock)
-  7. calculateTokenConsumption() — pure function, no I/O
-  8. UPDATE bucket with new token count
-  9. INSERT into idempotency_keys
-  10. COMMIT
-  On 40001/40P01 → exponential backoff + retry (max 3 times)
-
-Redis path:
-  4. Check idempotency key — if exists, return cached result
-  5. Run Lua script atomically:
-     - Read bucket Hash
-     - Calculate refill + consumption
-     - Write new bucket state
-     - Write idempotency key
-  (No retries needed — Lua atomicity prevents conflicts)
-
-11. Return: { verdict, remaining, retryAfter }
-```
-
----
-
-## Tech Stack
-
-- **Runtime:** Bun
-- **Language:** TypeScript
-- **Transport:** gRPC (`@grpc/grpc-js`)
-- **Schema:** Protocol Buffers
-- **PostgreSQL client:** `pg`
-- **Redis client:** `ioredis`
-- **Containers:** Docker Compose
+| `BACKEND` | `postgres` | Datastore engine: `postgres` or `redis` |
+| `DATABASE_URL` | — | Connection string (Required when `BACKEND=postgres`) |
+| `REDIS_URL` | — | Connection string (Required when `BACKEND=redis`) |
+| `DEFAULT_CAPACITY` | `10` | Default burst capacity for uninitialized buckets |
+| `DEFAULT_REFILL_RATE` | `1` | Default refill rate in tokens per second |
+| `MAX_RETRIES` | `3` | Maximum retry attempts for transient concurrency conflicts |
+| `BASE_BACKOFF_MS` | `50` | Base exponential backoff in milliseconds |
+| `MAX_BACKOFF_MS` | `500` | Maximum cap for retry backoff delay |
+| `BIND_ADDR` | `0.0.0.0:50051` | Address and port for the gRPC server |
