@@ -1,8 +1,8 @@
-# Centralized Rate Limiter Service
+# Distributed Rate Limiter
 
-A high-performance rate-limiting service using the **Token Bucket** algorithm, exposed via **gRPC**, with dual-backend support:
-- **Redis (High-Throughput Tier):** 1-RTT atomic Lua script with zero-allocation positional array parsing and persistent policy semantics.
-- **PostgreSQL (Durable/Audit Tier):** 1-RTT atomic PL/pgSQL stored procedure (`fn_acquire_rate_limit_token`) using row-level locking (`FOR UPDATE`) and relational idempotency auditing.
+A high-performance, horizontally scalable distributed rate limiter using the **Token Bucket** algorithm, exposed via **gRPC**, with dual-backend support:
+* **Redis (High-Throughput Coordination Tier):** 1-RTT atomic Lua script with zero-allocation positional array parsing and persistent policy semantics.
+* **PostgreSQL (Durable Audit Tier):** 1-RTT atomic PL/pgSQL stored procedure (`fn_acquire_rate_limit_token`) using row-level locking (`FOR UPDATE`) and relational idempotency auditing.
 
 Engineered with TypeScript and Bun.
 
@@ -10,44 +10,53 @@ Engineered with TypeScript and Bun.
 
 ## Architecture Overview
 
+The system is designed as a distributed, horizontally scalable architecture where multiple stateless rate limiter server nodes coordinate over a shared distributed persistence tier.
+
 ```text
-┌─────────────────┐
-│   gRPC Client   │
-└────────┬────────┘
-         │ (HTTP/2 - Protobuf)
-         ▼
-┌──────────────────────────────────────────────────────────┐
-│ RateLimitGrpcHandler (Input Validation & Error Mapping)   │
-└────────┬─────────────────────────────────────────────────┘
-         │
-         ▼
-┌──────────────────────────────────────────────────────────┐
-│ AcquireService (Retries, Exponential Backoff, Metrics)   │
-└────────┬─────────────────────────────────────────────────┘
-         │
-         ▼
-┌──────────────────────────────────────────────────────────┐
-│ RateLimitRepository Interface                            │
-└────────┬────────────────────────────────┬────────────────┘
-         │                                │
-         ▼                                ▼
-┌──────────────────────┐        ┌─────────────────────────┐
-│ Redis Repository     │        │ PostgreSQL Repository   │
-│ • 1-RTT Lua Script   │        │ • 1-RTT Stored Procedure│
-│ • Zero-alloc HMGET   │        │ • Row-level FOR UPDATE  │
-│ • Dynamic TTL        │        │ • Relational Audit Log  │
-└──────────────────────┘        └─────────────────────────┘
+                        ┌────────────────────────┐
+                        │      gRPC Clients      │
+                        └───────────┬────────────┘
+                                    │ (HTTP/2 - Protobuf)
+                                    ▼
+                        ┌────────────────────────┐
+                        │     Load Balancer      │
+                        │    (Envoy / Traefik)   │
+                        └─────┬────────────┬─────┘
+                              │            │
+            ┌─────────────────┘            └─────────────────┐
+            ▼                                                ▼
+┌───────────────────────────────┐        ┌───────────────────────────────┐
+│     Rate Limiter Node 1       │        │     Rate Limiter Node N       │
+│  - RateLimitGrpcHandler       │        │  - RateLimitGrpcHandler       │
+│  - Input & UUID Validation    │        │  - Input & UUID Validation    │
+│  - AcquireService (Retries)   │        │  - AcquireService (Retries)   │
+│  - AdminService               │        │  - AdminService               │
+└───────────────┬───────────────┘        └───────────────┬───────────────┘
+                │                                        │
+                └───────────────────┬────────────────────┘
+                                    │
+                                    ▼
+┌────────────────────────────────────────────────────────────────────────┐
+│                     Shared Distributed State Tier                      │
+│                                                                        │
+│   ┌────────────────────────────────┐  ┌────────────────────────────┐   │
+│   │ Redis (High-Throughput Tier)   │  │ Postgres (Durable Tier)    │   │
+│   │ • Atomic Positional Lua Script │  │ • 1-RTT PL/pgSQL Function  │   │
+│   │ • Dynamic Key TTL & Invariant  │  │ • Row-Level Tuple Locks    │   │
+│   │ • 5-min Idempotency Window     │  │ • Full Relational Audit    │   │
+│   └────────────────────────────────┘  └────────────────────────────┘   │
+└────────────────────────────────────────────────────────────────────────┘
 ```
 
 ### Layer Responsibilities
 
 | Layer | File | Responsibility |
 |---|---|---|
-| **Transport** | `src/transport/grpc_handler.ts` | Validates UUIDs/key bounds, checks datastore health (`ping`), translates domain errors to gRPC status codes. |
-| **Service** | `src/service/acquire_service.ts` | Orchestrates token acquisition, applies exponential backoff on transient concurrency errors (`SerializationError`, `DeadlockError`). |
-| **Domain** | `src/domain/token_bucket.ts` | Mathematical reference model for token consumption and clock skew handling. Store engines execute compiled projections (Lua/SQL). |
-| **Admin** | `src/service/admin_service.ts` | Administrative operations (bucket resets, utilization inspections) decoupled behind `AdminRepository`. |
-| **Persistence** | `src/persistence/` | Engine-specific atomic execution (`redis_repository.ts`, `pg_repository.ts`). |
+| **Transport** | `src/transport/grpc_handler.ts` | Validates UUID v4 request IDs, enforces string length limits, checks datastore health via `ping()`, and translates domain errors to gRPC status codes. |
+| **Service** | `src/service/acquire_service.ts` | Orchestrates token acquisition, applies exponential backoff with jitter on transient concurrency conflicts (`SerializationError`, `DeadlockError`). |
+| **Domain** | `src/domain/token_bucket.ts` | Mathematical reference model for token consumption and clock skew handling. Datastore engines execute compiled projections (Lua/SQL). |
+| **Admin** | `src/service/admin_service.ts` | Administrative operations (bucket resets, utilization inspections, key enumeration) decoupled behind `AdminRepository`. |
+| **Persistence** | `src/persistence/` | Backend-specific atomic execution (`redis_repository.ts`, `pg_repository.ts`). |
 
 ---
 
@@ -73,13 +82,13 @@ Benchmarks executed locally via Bun under identical hardware conditions.
 
 ### Critical Engineering Findings & Tradeoffs
 
-1. **Why PostgreSQL Collapsed Under Hot-Key Contention (223 RPS):**
-   In v1.0, PostgreSQL used multi-RTT `SERIALIZABLE` isolation where conflicting transactions aborted immediately with SQLSTATE `40001` and backed off with jitter (~1,256 RPS). In v1.1, the 1-RTT stored procedure uses `SELECT ... FOR UPDATE`, forcing concurrent workers to queue sequentially on the exact same row lock. This creates a **lock convoy** in PostgreSQL shared buffers: all transactions serialize on physical row locks and WAL buffer synchronization, pushing P99 latency to 891ms. See [ADR 001](docs/adr/001-pg-role-and-contention-tradeoffs.md).
-2. **Why Redis Sustains ~16k RPS Under Contention:**
+1. **PostgreSQL Contention Behavior (223 RPS):**
+   In v1.0, PostgreSQL used multi-RTT `SERIALIZABLE` isolation where conflicting transactions aborted with SQLSTATE `40001` and backed off with jitter (~1,256 RPS). In v1.1, the 1-RTT stored procedure uses `SELECT ... FOR UPDATE`, forcing concurrent workers to queue sequentially on the exact same row lock. This creates a lock convoy in PostgreSQL shared buffers: all transactions serialize on physical row locks and WAL buffer synchronization, pushing P99 latency to 891ms. See [ADR 001](docs/adr/001-pg-role-and-contention-tradeoffs.md).
+2. **Redis Contention Behavior (~16k RPS):**
    Redis operates on a single-threaded event loop. By replacing `HGETALL` and dictionary allocations with positional `HMGET` array access, each Lua invocation completes in microseconds with zero memory allocations inside the Lua VM.
 3. **Datastore Role Alignment:**
-   - **Redis:** High-throughput coordination plane for high-frequency API rate limiting.
-   - **PostgreSQL:** Durable audit plane for strict billing compliance, enterprise quotas, and administrative visibility.
+   * **Redis:** High-throughput coordination plane for high-frequency API rate limiting.
+   * **PostgreSQL:** Durable audit plane for strict billing compliance, enterprise quotas, and administrative visibility.
 
 ---
 
@@ -89,12 +98,12 @@ Benchmarks executed locally via Bun under identical hardware conditions.
 Previous iterations suffered from policy drift: capacity and refill rates were supplied as invocation arguments on every request, meaning changing environment variables mutated live buckets, and an idle bucket was purged after a static 60s TTL (resetting burst allowances).
 * **Fix:** The Lua script persists `capacity` and `refill_rate` into the Redis Hash upon creation.
 * **Dynamic TTL:** Keys expire only after at least 2x the duration needed to refill from empty to full:
-  $$\text{TTL}_{\text{ms}} = \max\left(60000, \frac{\text{capacity}}{\text{refill\_rate}} \times 2000\right)$$
+  `TTL_ms = Math.max(60000, Math.ceil((capacity / refill_rate) * 2000))`
 * **Idempotency Window:** Idempotency records are held for a dedicated 5-minute window (`300,000ms`).
 
 ### 2. Typed Domain Error Boundary
 `AcquireService` does not leak SQLSTATE codes or storage driver types. The repositories map lower-level exceptions into typed domain classes:
-* `SerializationError` (SQLSTATE `40001`) -> Retried with truncated exponential backoff + jitter.
+* `SerializationError` (SQLSTATE `40001`) -> Retried with truncated exponential backoff and jitter.
 * `DeadlockError` (SQLSTATE `40P01`) -> Retried.
 * `FatalError` -> Halts retries immediately.
 
@@ -103,28 +112,51 @@ The gRPC `HealthCheck` endpoint executes a live round-trip probe (`PING` on Redi
 
 ---
 
-## System Classification & The Path to 100k RPS
+## Distributed Topology & Path to 100k RPS
 
-### Current Classification: Centralized Multi-Process Service
-The system currently deploys as a multi-process service sharing a centralized datastore. It is not yet a multi-sharded distributed system with consistent hashing or partition tolerance.
+### Current Distributed State
+The service currently scales horizontally as multiple stateless worker processes behind a load balancer, sharing state across a centralized Redis or PostgreSQL coordination tier. Because instances are stateless, any instance can process any request for any key.
 
-### Physical Ceiling of the Current Architecture
-A single-threaded Redis instance handling 1 network RTT and 1 idempotency write per acquire hits a physical ceiling at 16k–25k RPS. Reaching 100k+ RPS cannot be achieved by micro-optimizing Lua scripts.
+### Distributed Cluster Management Roadmap
+To scale horizontally beyond single-node datastore constraints and achieve 100,000+ RPS:
 
-### Target Architecture: Edge-Local Token Leases (The 100k Roadmap)
-To scale beyond 100,000 RPS:
-1. **Local Quota Leases:** Each app worker process leases a batch of tokens (e.g., 50–100) from Redis in one atomic operation.
-2. **In-Memory Decisions:** Subsequent client requests are evaluated against local CPU memory (<50 nanoseconds, zero network I/O).
-3. **Asynchronous Batch Reconciliation:** Depleted tokens are reconciled asynchronously via batched increments or background gossip sync.
-4. **Tradeoff:** Rate limiting transitions from strict global synchrony to approximate global accuracy within a small sync interval window.
+```text
+┌────────────────────────────────────────────────────────┐
+│ Phase 1: Redis Cluster Sharding                        │
+│ - Distribute logical keys across Redis hash slots      │
+│ - Enforce {logicalKey} hash tags for multi-key atomicity│
+└──────────────────────────┬─────────────────────────────┘
+                           │
+                           ▼
+┌────────────────────────────────────────────────────────┐
+│ Phase 2: Application-Tier Consistent Hashing Ring      │
+│ - Dynamic node membership via Gossip / Consul          │
+│ - Sticky routing of requests to minimize cache misses  │
+└──────────────────────────┬─────────────────────────────┘
+                           │
+                           ▼
+┌────────────────────────────────────────────────────────┐
+│ Phase 3: Edge-Local Token Leases (Envoy / Stripe Model)│
+│ - Local in-memory token buckets on worker instances    │
+│ - Background batch leasing of quota blocks from Redis  │
+│ - Sub-microsecond local decisions; 99% fewer net hops  │
+└────────────────────────────────────────────────────────┘
+```
+
+1. **Redis Cluster Sharding:**
+   Utilize Redis Cluster with `{logicalKey}` hash tags to distribute key ownership across multiple Redis master nodes while preserving atomic Lua execution per key.
+2. **Consistent Hashing & Cluster Management:**
+   Introduce an application-tier consistent hashing ring (via Raft or Gossip membership) to route keys stickily to specific worker replicas, enabling local caching and connection affinity.
+3. **Edge-Local Token Leasing:**
+   Workers lease quota blocks (e.g., 50–100 tokens) from the shared Redis cluster. Subsequent client requests are evaluated against local process memory (<50 nanoseconds), reconciling asynchronously with Redis.
 
 ---
 
 ## Quick Start
 
 ### Prerequisites
-- Docker and Docker Compose
-- Bun runtime (`curl -fsSL https://bun.sh/install | bash`)
+* Docker and Docker Compose
+* Bun runtime (`curl -fsSL https://bun.sh/install | bash`)
 
 ### Start Infrastructure
 
